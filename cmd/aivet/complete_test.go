@@ -71,7 +71,7 @@ func TestEveryCommandIsCompletable(t *testing.T) {
 	for _, v := range cli.Complete(commands(), []string{""}) {
 		got[v.Name] = true
 	}
-	for _, name := range []string{"check", "fix", "setup", "ask", "skill", "env", "knowledge", "help", "completion", "version"} {
+	for _, name := range []string{"check", "fix", "setup", "ask", "skill", "env", "knowledge", "help", "completion", "update", "version"} {
 		if !got[name] {
 			t.Errorf("%s 能跑，但补不出来", name)
 		}

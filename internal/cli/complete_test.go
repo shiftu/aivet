@@ -22,7 +22,7 @@ func TestComplete(t *testing.T) {
 		words []string
 		want  string
 	}{
-		{"什么都没敲，给全部命令", []string{""}, "check fix setup ask skill env knowledge help completion version"},
+		{"什么都没敲，给全部命令", []string{""}, "check fix setup ask skill env knowledge help completion update version"},
 		{"命令名前缀", []string{"c"}, "check completion"},
 		{"顶层的横杠", []string{"-"}, "--help --version"},
 		{"check 的位置参数是工具", []string{"check", ""}, "claude codex hermes pi dsh ccswitch"},
@@ -43,7 +43,7 @@ func TestComplete(t *testing.T) {
 		{"help 能补出命令名", []string{"help", "kn"}, "knowledge"},
 		{"不认识的命令不瞎猜", []string{"nonsense", ""}, ""},
 		{"没有位置参数的命令", []string{"env", ""}, ""},
-		{"完全没给词也当成在敲第一个", nil, "check fix setup ask skill env knowledge help completion version"},
+		{"完全没给词也当成在敲第一个", nil, "check fix setup ask skill env knowledge help completion update version"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

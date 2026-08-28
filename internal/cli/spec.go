@@ -275,6 +275,27 @@ func Commands(fixIDs []string) []Command {
 			Notes: []string{"补出来的工具名、修复项 id 都是这台机器上此刻真实可用的，不是写死的清单。"},
 		},
 		{
+			Name: "update", Group: "其他",
+			Summary: "把 aivet 自己更新到 GitHub 上的最新版",
+			Usage:   "aivet update [--check] [--version vX.Y.Z] [--force]",
+			Long: "从 GitHub release 下当前平台的那个二进制，用它换掉正在跑的这个。\n" +
+				"发布时一起传的 SHA256SUMS 是必对的一环 —— 对不上就当场删掉不装。\n" +
+				"换的动作是同目录 rename：要么还是旧的、要么已经是新的，不会留下半个文件。\n\n" +
+				"装在需要 root 的目录里（/usr/local/bin）时会让你用 sudo 重跑一次，\n" +
+				"aivet 不会自己去提权。",
+			Flags: []Flag{
+				{Name: "check", Desc: "只报告有没有新版，不下载"},
+				{Name: "version", Arg: "TAG", Desc: "装指定版本（可以往回装）"},
+				{Name: "force", Desc: "版本号一样也重装一次"},
+			},
+			Examples: []Example{
+				{"aivet update", "有新版就装上"},
+				{"aivet update --check", "只看看，什么都不动"},
+				{"aivet update --version v0.1.6", "退回某个版本"},
+			},
+			Notes: []string{"用包管理器（brew 之类）装的话，更新交给它，别用这个 —— 换掉的文件会在下次它升级时被盖回去。"},
+		},
+		{
 			Name: "version", Group: "其他",
 			Summary: "打印版本号",
 			Usage:   "aivet version",

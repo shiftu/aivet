@@ -76,7 +76,13 @@ aivet ask                      把报告交给一个健康的 agent，让它修�
 aivet skill install            把 aivet 装成 Claude Code / Codex / Hermes / pi 的技能
 aivet env                      系统信息 + 各工具的安装命令
 aivet completion --install     装 shell 补全（bash / zsh / fish / PowerShell）
+aivet update                   把 aivet 自己更新到最新版
 ```
+
+**自己更新自己**：`aivet update` 从 GitHub release 下当前平台的二进制，用它换掉正在跑的这个，
+下载时有进度条。发布时一起传的 `SHA256SUMS` 是必对的一环 —— 对不上就当场删掉不装，
+所以任何一步出错，你手里那个 aivet 都还是完好的。`--check` 只看不动，`--version vX.Y.Z` 可以往回装。
+（用 brew 之类装的话更新交给它，别用这个。）
 
 **按 Tab 补全**：装 aivet 的脚本会顺手替你装好，一般不用自己动手。想手动装（或换了 shell）就
 `aivet completion --install`——它认出你在用哪个 shell，把脚本写到该在的地方，再往 rc 文件里补上加载它的那几行。

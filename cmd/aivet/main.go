@@ -86,6 +86,8 @@ func main() {
 		code = runKnowledge(args)
 	case "version":
 		fmt.Printf("aivet %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+	case "update":
+		code = runUpdate(ctx, args)
 	case "completion":
 		code = runCompletion(args)
 	case "__complete":

@@ -35,6 +35,9 @@ func New() Palette {
 // Plain 返回不着色的调色板（--json / 非交互用）。
 func Plain() Palette { return Palette{} }
 
+// ASCII 说明这台终端画不了 Unicode 图形，进度条之类要退化成 ASCII。
+func (p Palette) ASCII() bool { return p.ascii }
+
 func (p Palette) wrap(code, s string) string {
 	if !p.enabled || s == "" {
 		return s
