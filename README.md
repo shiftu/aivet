@@ -124,6 +124,17 @@ make build          # 当前平台 → dist/
 make release        # macOS/Linux/Windows × amd64/arm64 → dist/
 ```
 
+### 发版
+
+```bash
+git tag -a v0.2.0 -m 'v0.2.0'
+git push origin main v0.2.0
+make release VERSION=v0.2.0                 # 六个平台 → dist/，并生成 SHA256SUMS
+gh release create v0.2.0 dist/aivet_* dist/SHA256SUMS --title 'v0.2.0' --notes '变更说明'
+```
+
+`make release` 会先跑 `go vet` + `go test`，任一失败就不产出二进制。资产名必须保持 `aivet_<os>_<arch>[.exe]`——`install.sh` / `install.ps1` 靠这个命名去 Releases 里找文件。
+
 结构：`internal/probe` 是无工具语义的探针（读文件、找可执行、打网关）；`internal/harness/<tool>` 各自实现
 `Detect / Check / Fixers / Configure / LaunchArgs`；`cmd/aivet` 只做参数解析和排版。加一件新工具 = 加一个包 + 注册一行。
 
