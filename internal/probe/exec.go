@@ -19,17 +19,37 @@ func Which(names ...string) (string, bool) {
 	return "", false
 }
 
-// Version 跑 `<bin> args...` 取第一行非空输出，失败返回空串。
+// Version 跑 `<bin> args...` 取第一行非空输出；跑不起来返回空串。
 func Version(bin string, args ...string) string {
-	out, _ := Run(context.Background(), 20*time.Second, "", bin, args...)
+	v, _ := VersionOr(bin, args...)
+	return v
+}
+
+// VersionOr 同 Version，但把「文件在 PATH 上却跑不起来」单独报出来。
+//
+// 为什么要分开：npm 装的工具（codex / pi / dsh）经常出现 shim 在、平台包没装全的情况，
+// `codex --version` 会打出 `Error: spawn …/codex ENOENT` 并非零退出。
+// 老实现把这行错误当成版本号显示，于是标题上写着一串 ENOENT，
+// 底下的配置项还一路绿灯 —— 根因被埋在最不显眼的地方。
+func VersionOr(bin string, args ...string) (version, broken string) {
+	out, err := Run(context.Background(), 20*time.Second, "", bin, args...)
+	first := ""
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.Contains(strings.ToLower(line), "warning") {
 			continue
 		}
-		return line
+		first = line
+		break
 	}
-	return ""
+	if err != nil {
+		reason := Tail(out, 3, 200)
+		if reason == "" {
+			reason = err.Error()
+		}
+		return "", reason
+	}
+	return first, ""
 }
 
 // Run 带超时执行命令，返回合并后的 stdout+stderr。

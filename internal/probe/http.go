@@ -94,7 +94,19 @@ func Ping(ctx context.Context, ep Endpoint, model string) PingResult {
 	switch ep.Protocol {
 	case Responses:
 		url = apiURL(ep.BaseURL, "responses")
-		body = map[string]any{"model": model, "input": "ping", "max_output_tokens": 16, "stream": false}
+		// input 必须是 item 数组，且 item 要带 type:"message"、content 用 input_text。
+		// 实测（llm-gateway 0.3）：字符串 input、缺 type、content type:"text" 三种写法都 400。
+		// 这是 Responses API 的规范形状，OpenAI 官方端点同样接受。
+		body = map[string]any{
+			"model": model,
+			"input": []map[string]any{{
+				"type":    "message",
+				"role":    "user",
+				"content": []map[string]any{{"type": "input_text", "text": "ping"}},
+			}},
+			"max_output_tokens": 16,
+			"stream":            false,
+		}
 	case Anthropic:
 		url = apiURL(ep.BaseURL, "messages")
 		body = map[string]any{"model": model, "max_tokens": 1, "messages": []map[string]string{{"role": "user", "content": "ping"}}}

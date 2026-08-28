@@ -12,13 +12,24 @@ import (
 //
 // 顺序有讲究：清单拉不到多半是地址/网络问题，此时不再发请求，避免一个根因刷出三条红。
 func ProbeGateway(c *Context, b *Builder, ep probe.Endpoint, model string) {
+	ids, ok := ProbeReach(c, b, ep)
+	if !ok {
+		return
+	}
+	probeModel(c, b, ep, model, ids)
+}
+
+// ProbeReach 只做第一连：网关到底通不通。返回模型清单（可能为空）和「能不能继续往下探」。
+// 拆出来是因为有一类情况只能查到这里为止 —— 比如 Claude Code 的模型别名，
+// 真正发给网关的名字是工具内部解析出来的，我们看不到，再往下探就是猜。
+func ProbeReach(c *Context, b *Builder, ep probe.Endpoint) ([]string, bool) {
 	if c.Offline {
 		b.Skip("gateway", "网关探测", "离线模式，跳过")
-		return
+		return nil, false
 	}
 	if ep.Key == "" {
 		b.Skip("gateway", "网关探测", "没有 key，探不了")
-		return
+		return nil, false
 	}
 	ids, pr := c.Gateways.Models(c.Ctx, ep)
 	base := probe.NormalizeBase(ep.BaseURL)
@@ -30,15 +41,19 @@ func ProbeGateway(c *Context, b *Builder, ep probe.Endpoint, model string) {
 		b.Warn("gateway.reach", "网关可达", fmt.Sprintf("%s 通了，但没有模型清单接口（%d），跳过清单核对", base, pr.Status), "")
 	case pr.Status == 401 || pr.Status == 403:
 		b.Fail("gateway.reach", "网关认证", fmt.Sprintf("%s · %s", base, pr.Detail), "key 是不是贴错了 / 过期了？重新拿一把，或 aivet setup 重填")
-		return
+		return nil, false
 	case pr.Status == 0:
 		b.Fail("gateway.reach", "网关可达", fmt.Sprintf("%s · %s", base, pr.Detail), "先在浏览器或 curl 里打开这个地址确认能连上；本机网关要先启动")
-		return
+		return nil, false
 	default:
 		b.Fail("gateway.reach", "网关可达", fmt.Sprintf("%s · %s", base, pr.Detail), "")
-		return
+		return nil, false
 	}
+	return ids, true
+}
 
+// probeModel 是第二、三连：模型在不在清单里、真发一条能不能通。
+func probeModel(c *Context, b *Builder, ep probe.Endpoint, model string, ids []string) {
 	if model == "" {
 		b.Warn("gateway.model", "模型名", "没有指定模型，工具会用自己的默认值——走网关时通常会 404", "把模型名写进配置（aivet setup 会一并写好）")
 		return
@@ -47,7 +62,7 @@ func ProbeGateway(c *Context, b *Builder, ep probe.Endpoint, model string) {
 		if probe.HasModel(ids, model) {
 			b.OK("gateway.model", "模型在清单里", model)
 		} else {
-			b.Fail("gateway.model", "模型在清单里", fmt.Sprintf("网关没有 %q", model), "清单里长得像的："+strings.Join(closest(ids, model, 5), "、"))
+			b.Fail("gateway.model", "模型在清单里", fmt.Sprintf("网关没有 %q", model), "清单里长得像的："+strings.Join(Similar(ids, model, 5), "、"))
 			return
 		}
 	}
@@ -56,7 +71,7 @@ func ProbeGateway(c *Context, b *Builder, ep probe.Endpoint, model string) {
 		b.OK("gateway.ping", "真发一条请求", ping.Detail)
 		return
 	}
-	if ping.Status == 403 && pr.OK {
+	if ping.Status == 403 && len(ids) > 0 {
 		// 清单能拉说明 key 是对的；请求被 403 多半是网关按客户端指纹/模型放行
 		// （例如「只允许 Codex 官方客户端」）。HTTP 探测被拒 ≠ 工具用不了。
 		b.Warn("gateway.ping", "真发一条请求", ping.Detail, "网关按客户端或模型鉴权，aivet 的探测被拒不代表工具本身不能用；用 --live 让工具自己跑一次")
@@ -74,8 +89,8 @@ func ProbeGateway(c *Context, b *Builder, ep probe.Endpoint, model string) {
 	b.Fail("gateway.ping", "真发一条请求", ping.Detail, hint)
 }
 
-// closest 按「共有子串」粗略挑出最像的几个模型名——够用就行，不上编辑距离。
-func closest(ids []string, want string, n int) []string {
+// Similar 按「共有子串」粗略挑出最像的几个模型名——够用就行，不上编辑距离。
+func Similar(ids []string, want string, n int) []string {
 	type scored struct {
 		id    string
 		score int

@@ -29,11 +29,11 @@ func (H) Detect(c *harness.Context) harness.Detection {
 	if !ok {
 		return harness.Detection{}
 	}
-	v := probe.Version(p, "--version")
+	v, broken := probe.VersionOr(p, "--version")
 	if i := strings.Index(v, " ·"); i > 0 {
 		v = v[:i]
 	}
-	return harness.Detection{Installed: true, Path: p, Version: v}
+	return harness.Detection{Installed: true, Path: p, Version: v, Broken: broken}
 }
 
 type resolved struct {

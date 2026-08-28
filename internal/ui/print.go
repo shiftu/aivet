@@ -22,7 +22,8 @@ func (pr Printer) Banner(version, osLabel string, live bool) {
 	if live {
 		mode = "配置 + 网关探测 + 真实跑一次"
 	}
-	fmt.Fprintf(pr.W, "\n%s %s  %s\n", pr.P.Bold(pr.P.Cyan("aivet")), pr.P.Dim("v"+version), pr.P.Dim("· "+osLabel))
+	// 版本号可能已经带 v（构建时注入的是 git tag），别拼成 vv0.1.0。
+	fmt.Fprintf(pr.W, "\n%s %s  %s\n", pr.P.Bold(pr.P.Cyan("aivet")), pr.P.Dim("v"+strings.TrimPrefix(version, "v")), pr.P.Dim("· "+osLabel))
 	fmt.Fprintf(pr.W, "%s\n", pr.P.Dim("给套着缰绳的 AI 看病 · "+mode))
 }
 

@@ -298,8 +298,11 @@ func runAsk(ctx context.Context, args []string) int {
 	}
 	h, err := agent.Pick(all, r, *with)
 	if err != nil {
+		// 没人能接手时也要把提示词交到用户手上 —— 他手边可能有网页版、
+		// 或者另一台机器上的 agent。让他重跑一次 --print 是白费一轮体检。
 		pr.Line("fail", err.Error())
-		fmt.Fprintln(pr.W, pr.P.Dim("  提示词已备好，可以自己粘给任何 agent：aivet ask --print"))
+		fmt.Fprintln(pr.W, pr.P.Dim("\n  下面这段可以直接粘给任何一个 agent（网页版也行）：\n"))
+		fmt.Fprintln(pr.W, prompt)
 		return 1
 	}
 	pr.Line("run", "交给 "+h.Label()+" 接手，报告在 "+path)

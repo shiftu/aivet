@@ -28,7 +28,8 @@ func (H) Detect(c *harness.Context) harness.Detection {
 	if !ok {
 		return harness.Detection{}
 	}
-	return harness.Detection{Installed: true, Path: p, Version: probe.Version(p, "--version")}
+	v, broken := probe.VersionOr(p, "--version")
+	return harness.Detection{Installed: true, Path: p, Version: v, Broken: broken}
 }
 
 type provider struct {

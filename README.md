@@ -33,14 +33,18 @@ aivet v0.1.0  · macOS arm64
 
 | 工具 | 查什么 | 能自动修什么 |
 |---|---|---|
-| **Claude Code** | settings.json 语法、接入方式（OAuth / key / 网关）、`ANTHROPIC_BASE_URL` 是否误带 `/v1`、shell 与文件里的环境变量打架、网关三连 | 跳过首次向导、去掉多余的 `/v1` |
+| **Claude Code** | settings.json 语法、接入方式（OAuth / key / 网关）、`ANTHROPIC_BASE_URL` 是否误带 `/v1`、模型别名（`sonnet`/`opus`/`haiku`）走网关时有没有映射、shell 与文件里的环境变量打架、网关三连 | 跳过首次向导、去掉多余的 `/v1` |
 | **Codex CLI** | config.toml 语法、`model_provider` 与表名是否成对、`wire_api`（0.137+ 只认 responses）、key 来源（env_key / auth.json / ChatGPT 登录）、网关三连 | `wire_api` 改 responses |
 | **Hermes Agent** | config.yaml（新旧两代 schema）、提供方、key（env / ~/.hermes/.env / 明文）、模型是否已声明、网关三连 | — |
 | **pi agent** | settings.json + models.json、defaultModel 是否在提供方清单里、key、网关三连 | defaultModel 改成清单第一个 |
 | **DeepSeek Harness (dsh)** | settings.yaml + .credentials.yaml、每个 profile 的模型覆盖、插件是否装好、Node 是否在、网关三连 | 默认模型改成清单第一个 |
 | **cc-switch** | 它认为当前生效的 provider 和原生文件里的是否一致（漂移检测） | — |
 
-「网关三连」= 拉模型清单 → 模型在不在清单里 → 真发一条 `max_tokens=1` 的请求。六件工具指向同一个网关时只探一次。
+每件工具还会先确认它**真的跑得起来**：npm 装的那几个（codex / pi / dsh）常出现 shim 在、平台专用包没装全，`--version` 直接报 ENOENT——这种「装了但是坏的」会排在最前面报出来，而不是让底下的配置项一路绿灯。
+
+「网关三连」= 拉模型清单 → 模型在不在清单里 → 真发一条最小请求。六件工具指向同一个网关时只探一次。
+
+有些结论**探不到底**，aivet 就明说探不到底，不假装知道：Claude Code 配 `model: "sonnet"` 时，真正发给网关的是它内部把别名解析出的模型 id，配置文件里看不见——这种情况报提醒并告诉你 `--live` 能一锤定音，而不是拿别名去和清单比对然后误判成故障。
 
 ## 安装
 

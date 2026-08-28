@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/shiftu/aivet/internal/platform"
 	"github.com/shiftu/aivet/internal/probe"
 	"github.com/shiftu/aivet/internal/report"
 )
@@ -40,6 +41,8 @@ type Detection struct {
 	Installed bool
 	Path      string
 	Version   string
+	// Broken 非空 = 可执行文件在 PATH 上，但跑不起来（装坏了）。
+	Broken string
 }
 
 // Plan 是 setup 向导收集到的「一处来源」：所有工具都从它渲染配置。
@@ -87,7 +90,18 @@ func Run(c *Context, h Harness) report.Tool {
 		t.Checks = []report.Check{{ID: h.ID() + ".installed", Tool: h.ID(), Title: "安装", Status: report.Skip, Detail: "没找到可执行文件，跳过"}}
 		return t
 	}
-	t.Checks = h.Check(c, d)
+	var pre []report.Check
+	if d.Broken != "" {
+		// 连 --version 都跑不出来，后面配置查得再绿也没意义 —— 这条必须排在最前面。
+		// 配置项还是照查（对修复有用），但不再浪费两分钟去 --live 跑一个跑不起来的东西。
+		pre = append(pre, report.Check{ID: h.ID() + ".runnable", Tool: h.ID(), Title: "可执行", Status: report.Fail,
+			Detail: d.Broken,
+			Hint:   "文件在 PATH 上却跑不起来 —— 多半是装坏了（npm 的平台专用包没装全，或升级中断）。重装：" + platform.Install(h.ID())})
+		live := c.Live
+		c.Live = false
+		defer func() { c.Live = live }()
+	}
+	t.Checks = append(pre, h.Check(c, d)...)
 	return t
 }
 

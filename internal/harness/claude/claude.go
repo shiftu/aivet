@@ -17,6 +17,25 @@ import (
 	"github.com/shiftu/aivet/internal/report"
 )
 
+// modelAliasEnv 是 Claude Code 三个内置别名，以及把它们重定向到网关模型的环境变量。
+//
+// 别名不是模型名：`model: "sonnet"` 会被 Claude Code 解析成它内置的某个
+// claude-sonnet-… id 再发出去，那个 id 我们从配置里看不到。所以走网关时
+// 要么用 ANTHROPIC_MODEL 直接写死网关上的名字，要么用下面这些变量把别名映射过去。
+var modelAliasEnv = map[string]string{
+	"sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"opus":   "ANTHROPIC_DEFAULT_OPUS_MODEL",
+	"haiku":  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+}
+
+// stripQualifier 去掉 claude-fable-5[1m] 这类结尾的能力后缀 —— 它不属于模型名。
+func stripQualifier(m string) string {
+	if i := strings.Index(m, "["); i > 0 {
+		return strings.TrimSpace(m[:i])
+	}
+	return m
+}
+
 // H 实现 harness.Harness。
 type H struct{}
 
@@ -28,7 +47,8 @@ func (H) Detect(c *harness.Context) harness.Detection {
 	if !ok {
 		return harness.Detection{}
 	}
-	return harness.Detection{Installed: true, Path: p, Version: probe.Version(p, "--version")}
+	v, broken := probe.VersionOr(p, "--version")
+	return harness.Detection{Installed: true, Path: p, Version: v, Broken: broken}
 }
 
 // resolved 是合并了 shell 环境和 settings.json 之后的有效配置。
@@ -41,7 +61,10 @@ type resolved struct {
 	baseSource   string
 	key          string
 	keySource    string
-	model        string
+	model        string // 配置里写的那个（可能是别名）
+	alias        string // 是 sonnet/opus/haiku 之一时，这里是别名名字
+	aliasEnv     string // 该别名对应的映射环境变量名
+	effModel     string // 真正会发给网关的模型名；别名没映射时为空
 	hasOAuth     bool
 	onboarded    bool
 	stateErr     error
@@ -90,6 +113,14 @@ func resolve(c *harness.Context) resolved {
 	if probe.Exists(filepath.Join(c.Home, ".claude", ".credentials.json")) {
 		r.hasOAuth = true
 	}
+	if base := strings.ToLower(stripQualifier(r.model)); base != "" {
+		if envName, isAlias := modelAliasEnv[base]; isAlias {
+			r.alias, r.aliasEnv = base, envName
+			r.effModel, _ = pick(envName)
+		} else {
+			r.effModel = stripQualifier(r.model)
+		}
+	}
 	return r
 }
 
@@ -136,10 +167,14 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		}
 	}
 
-	if r.model != "" {
+	switch {
+	case r.model == "" && usingGateway:
+		b.Warn("model", "模型", "没设 ANTHROPIC_MODEL，会用 Claude 内置的默认模型名去打网关", "在 settings.json env 里加 ANTHROPIC_MODEL（aivet setup 会写）")
+	case r.model == "":
+	case r.alias != "" && r.effModel != "":
+		b.OK("model", "模型", fmt.Sprintf("%s → %s（%s）", r.alias, r.effModel, r.aliasEnv))
+	default:
 		b.OK("model", "模型", r.model)
-	} else if usingGateway {
-		b.Warn("model", "模型", "没设 ANTHROPIC_MODEL，会用 Claude 默认模型名去打网关", "在 settings.json env 里加 ANTHROPIC_MODEL（aivet setup 会写）")
 	}
 
 	if b.HasFail() {
@@ -150,7 +185,24 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		if base == "" {
 			base = "https://api.anthropic.com"
 		}
-		harness.ProbeGateway(c, b, probe.Endpoint{BaseURL: base, Key: r.key, Protocol: probe.Anthropic}, r.model)
+		ep := probe.Endpoint{BaseURL: base, Key: r.key, Protocol: probe.Anthropic}
+		switch {
+		case r.alias != "" && r.effModel == "" && usingGateway:
+			// 只能查到「网关通不通」为止。再往下就是猜：Claude Code 发出去的是它
+			// 内部把别名解析成的那个 id，配置文件里看不到，我们无从核对。
+			// 断言它挂了会误伤（网关也可能就认这个别名），断言它没事更糟。
+			ids, ok := harness.ProbeReach(c, b, ep)
+			if ok {
+				hint := "要么把 ANTHROPIC_MODEL 直接写成网关上的名字，要么设 " + r.aliasEnv + " 把别名映射过去（aivet setup --force --tools claude 两件都会写）。想立刻知道到底通不通：aivet check claude --live"
+				if len(ids) > 0 {
+					hint = "清单里长得像的：" + strings.Join(harness.Similar(ids, r.alias, 5), "、") + "。" + hint
+				}
+				b.Warn("model.alias", "模型别名没映射",
+					fmt.Sprintf("配置里是别名 %q，Claude Code 会把它解析成自己内置的模型 id 再发给网关 —— 那个 id 网关多半没有，但从配置看不出来", r.alias), hint)
+			}
+		default:
+			harness.ProbeGateway(c, b, ep, r.effModel)
+		}
 	} else if !c.Live {
 		b.Warn("gateway", "网关探测", "OAuth 登录 / helper 脚本没法用 HTTP 探，只能真跑一次", "aivet check claude --live")
 	}

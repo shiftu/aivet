@@ -35,7 +35,7 @@ func (H) Detect(c *harness.Context) harness.Detection {
 	}
 	d := harness.Detection{Installed: true, Path: p}
 	if ok {
-		d.Version = probe.Version(p, "--version")
+		d.Version, d.Broken = probe.VersionOr(p, "--version")
 	} else {
 		d.Version = "仅数据目录（GUI）"
 	}
