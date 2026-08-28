@@ -253,16 +253,23 @@ func Commands(fixIDs []string) []Command {
 		{
 			Name: "completion", Group: "其他",
 			Summary: "装 shell 补全：命令、选项、工具名都能按 Tab 补出来",
-			Usage:   "aivet completion [bash|zsh|fish|powershell]",
-			Args:    "shell：" + join(Shells, "  ") + "（不填 = 认一下你在用哪个，然后告诉你怎么装）",
-			Long: "不带参数时，它认出你的 shell 并把安装命令直接给你，照抄一行就行。\n" +
+			Usage:   "aivet completion [--install] [bash|zsh|fish|powershell]",
+			Args:    "shell：" + join(Shells, "  ") + "（不填 = 认一下你在用哪个）",
+			Long: "--install 是一步到位：认出你的 shell，把脚本写到该在的地方，再往 rc 文件里\n" +
+				"补上加载它的那几行。重复跑是安全的 —— 那几行用标记框着，升级时整段换掉。\n" +
+				"install.sh / install.ps1 装完 aivet 会顺手替你跑一次，通常你不用自己敲。\n\n" +
+				"不带参数时，它认出你的 shell 并把安装命令直接给你，照抄一行就行。\n" +
 				"带 shell 名时，把补全脚本打到标准输出，你自己决定重定向到哪。\n\n" +
 				"脚本本身只有十行 —— 每按一次 Tab，它回头问 aivet 要候选。所以装一次就够了：\n" +
 				"以后 aivet 升级、多了命令、多了可自动修复的项，补全跟着变，不用重装。",
+			Flags: []Flag{
+				{Name: "install", Desc: "直接装好：写脚本 + 改 rc，不用自己重定向"},
+			},
 			Positional: vals(Shells...),
 			Examples: []Example{
+				{"aivet completion --install", "认一下 shell 并直接装好"},
 				{"aivet completion", "认一下 shell，给出照抄就能用的安装命令"},
-				{"aivet completion zsh > ~/.zsh/completions/_aivet", "装给 zsh"},
+				{"aivet completion --install zsh", "指定 shell 装好（比如你在 bash 里给 zsh 装）"},
 				{"aivet completion bash", "把 bash 脚本打到屏幕上"},
 			},
 			Notes: []string{"补出来的工具名、修复项 id 都是这台机器上此刻真实可用的，不是写死的清单。"},

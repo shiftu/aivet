@@ -75,13 +75,17 @@ aivet setup                    新手向导：网关地址 + key + 模型 → �
 aivet ask                      把报告交给一个健康的 agent，让它修剩下的
 aivet skill install            把 aivet 装成 Claude Code / Codex / Hermes / pi 的技能
 aivet env                      系统信息 + 各工具的安装命令
-aivet completion               装 shell 补全（bash / zsh / fish / PowerShell）
+aivet completion --install     装 shell 补全（bash / zsh / fish / PowerShell）
 ```
 
-**按 Tab 补全**：`aivet completion` 会认出你在用哪个 shell，把安装命令直接给你，照抄一行就行。
+**按 Tab 补全**：装 aivet 的脚本会顺手替你装好，一般不用自己动手。想手动装（或换了 shell）就
+`aivet completion --install`——它认出你在用哪个 shell，把脚本写到该在的地方，再往 rc 文件里补上加载它的那几行。
+重复跑是安全的：那几行用标记框着，升级时整段换掉，不会越叠越多。
 装完之后命令、选项、工具名、可自动修复项的 id 都能补出来（`aivet check <Tab>` → `claude codex hermes …`，
 `aivet fix <Tab>` → 这台机器上此刻真能修的那几项）。补全脚本只是层薄壳，每次按 Tab 都回头问 aivet 要候选 ——
 所以装一次就够了，以后 aivet 升级、加了命令也不用重装。
+
+不想让它碰你的 rc 文件，就用 `aivet completion zsh > 你说了算的路径`——不带 `--install` 时它只把脚本打到标准输出。
 
 不用记：`aivet help` 是命令总览，`aivet help <命令>`（或 `aivet <命令> --help`）是那个命令的详细页——选项、例子、注意事项都在里面。
 

@@ -36,5 +36,9 @@ case ":$PATH:" in
 esac
 echo
 "$dir/aivet" version
+
+# 顺手把 Tab 补全装上 —— 这一步失败不该把整个安装拖下水（认不出 shell、rc 文件只读都可能），
+# aivet 自己也会把这种情况当成「跳过」而不是错，这里再兜一层 || true。
+"$dir/aivet" completion --install || true
+
 echo "下一步：aivet        （体检）   aivet setup （新手向导）"
-echo "顺手装个 Tab 补全：aivet completion"

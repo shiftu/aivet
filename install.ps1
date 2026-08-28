@@ -19,5 +19,8 @@ if ($userPath -notlike "*$dir*") {
   Write-Host "已把 $dir 加入用户 PATH（新开的终端生效）"
 }
 & (Join-Path $dir "aivet.exe") version
+
+# 顺手把 Tab 补全装上。补全装不上不算安装失败，所以这里单独放行错误。
+try { & (Join-Path $dir "aivet.exe") completion --install powershell } catch { Write-Host "补全没装上（不影响 aivet 本身）：$_" }
+
 Write-Host "下一步：aivet        （体检）   aivet setup （新手向导）"
-Write-Host "顺手装个 Tab 补全：aivet completion"

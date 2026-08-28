@@ -564,10 +564,18 @@ func initKnowledge(k *knowledge.K) int {
 // 而这两件事 aivet 都能替用户答上。
 func runCompletion(args []string) int {
 	var want string
+	install := false
 	for _, a := range args {
+		if a == "--install" {
+			install = true
+			continue
+		}
 		if !strings.HasPrefix(a, "-") && want == "" {
 			want = strings.ToLower(a)
 		}
+	}
+	if install {
+		return runCompletionInstall(want)
 	}
 	if want != "" {
 		script, ok := cli.Script(want)
@@ -589,7 +597,11 @@ func runCompletion(args []string) int {
 		}
 		return 0
 	}
-	pr.Line("ok", "看起来你在用 "+sh+"。照抄下面这行：")
+	pr.Line("ok", "看起来你在用 "+sh+"。最省事的是让 aivet 自己装：")
+	fmt.Fprintln(pr.W)
+	fmt.Fprintln(pr.W, "    aivet completion --install")
+	fmt.Fprintln(pr.W)
+	pr.Line("info", "想自己控制装到哪，就照抄下面这行：")
 	fmt.Fprintln(pr.W)
 	for i, line := range cli.InstallHint(sh) {
 		if i == 0 {
@@ -600,6 +612,65 @@ func runCompletion(args []string) int {
 	}
 	fmt.Fprintln(pr.W, pr.P.Dim("\n  装一次就够了：命令、选项、工具名、能修的项都是每次按 Tab 现问 aivet 要的。\n"))
 	return 0
+}
+
+// runCompletionInstall 是 --install 的活：把补全脚本写到该在的地方，再往 rc 里补上加载它的那几行。
+// install.sh / install.ps1 装完 aivet 会顺手调它，所以它得小声、幂等、并且认不出 shell 时不当成失败 ——
+// 补全没装上不该让整个安装看起来是坏的。
+func runCompletionInstall(want string) int {
+	pr := newPrinter(false)
+	pr.Section("shell 补全")
+	sh := want
+	if sh == "" {
+		sh = detectShell()
+	}
+	if sh == "" {
+		pr.Line("warn", "认不出你在用哪个 shell（$SHELL 是空的），补全先跳过。挑一个自己装：")
+		for _, s := range cli.Shells {
+			pr.Line("info", "aivet completion --install "+s)
+		}
+		return 0
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		pr.Line("warn", "找不到家目录，补全先跳过："+err.Error())
+		return 0
+	}
+	var psProfile string
+	if sh == "powershell" || sh == "pwsh" {
+		// $PROFILE 的真实路径只能问 PowerShell 本人要：OneDrive 会把「文档」整个重定向走。
+		if psProfile = cli.PowerShellProfile(); psProfile == "" {
+			pr.Line("warn", "问不出 PowerShell 的 $PROFILE 在哪，补全先跳过。手动装：aivet completion powershell")
+			return 0
+		}
+	}
+	res, err := cli.Install(sh, home, psProfile)
+	if err != nil {
+		pr.Line("warn", "补全没装上（不影响 aivet 本身）："+err.Error())
+		return 0
+	}
+	switch {
+	case res.ScriptWritten || res.RCWritten:
+		pr.Line("ok", "补全已装好（"+sh+"）："+short(res.ScriptPath, home))
+		if res.RCWritten {
+			pr.Line("info", "已在 "+short(res.RCPath, home)+" 里加上加载它的几行；新开一个终端就生效。")
+		}
+	default:
+		pr.Line("ok", "补全已经是最新的（"+sh+"）。")
+	}
+	for _, n := range res.Notes {
+		pr.Line("warn", n)
+	}
+	fmt.Fprintln(pr.W, pr.P.Dim("\n  装一次就够了：命令、选项、工具名、能修的项都是每次按 Tab 现问 aivet 要的。\n"))
+	return 0
+}
+
+// short 把家目录换成 ~，路径短一点好读。
+func short(path, home string) string {
+	if home != "" && strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
 }
 
 // detectShell 从 $SHELL 认 shell；认不出就返回空串，由调用方给出选项。
