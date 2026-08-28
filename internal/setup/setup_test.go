@@ -103,7 +103,7 @@ func TestCodexWireAPIFix(t *testing.T) {
 		}
 		return ""
 	}, Gateways: probe.NewGatewayCache(), Offline: true}
-	checks := codex.H{}.Check(c, harness.Detection{Installed: true})
+	checks := codex.H{}.Check(c, harness.Detection{Installed: true, Version: "codex-cli 0.140.0"})
 	var found bool
 	for _, ch := range checks {
 		if ch.FixID == "codex.wire_api" && ch.Status == report.Fail {
@@ -126,5 +126,47 @@ func TestCodexWireAPIFix(t *testing.T) {
 	}
 	if m, _ := filepath.Glob(cfg + ".aivet-bak-*"); len(m) != 1 {
 		t.Fatal("应留一个备份")
+	}
+}
+
+// wire_api = "chat" 该报故障还是提醒，取决于用户装的是哪一版 —— 无条件断言
+// 会在两头出错：旧版用户被一条他那儿根本不成立的「故障」挡住，
+// 而 codex 万一把 chat 加回来，这条就成了纯误报。
+func TestCodexWireAPIIsVersionAware(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		want    report.Status
+	}{
+		{"新版已删除 → 故障", "codex-cli 0.140.0", report.Fail},
+		{"旧版还支持 → 提醒", "codex-cli 0.130.2", report.Warn},
+		{"读不出版本 → 提醒，不瞎断言", "", report.Warn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			cfg := filepath.Join(home, ".codex", "config.toml")
+			os.MkdirAll(filepath.Dir(cfg), 0o755)
+			os.WriteFile(cfg, []byte("model = \"x\"\nmodel_provider = \"g\"\n\n[model_providers.g]\nbase_url = \"http://g/v1\"\nwire_api = \"chat\"\nenv_key = \"GK\"\n"), 0o600)
+			c := &harness.Context{Ctx: context.Background(), Home: home, Env: func(k string) string {
+				if k == "GK" {
+					return "k1"
+				}
+				return ""
+			}, Gateways: probe.NewGatewayCache(), Offline: true}
+			for _, ch := range (codex.H{}).Check(c, harness.Detection{Installed: true, Version: tc.version}) {
+				if ch.ID != "codex.wire_api" {
+					continue
+				}
+				if ch.Status != tc.want {
+					t.Fatalf("版本 %q：想要 %s，得到 %s（%s）", tc.version, tc.want, ch.Status, ch.Detail)
+				}
+				// 三种情况都得留一条能自动修的出路。
+				if ch.FixID != "codex.wire_api" {
+					t.Errorf("版本 %q：这一项应该可自动修复，实际 FixID=%q", tc.version, ch.FixID)
+				}
+				return
+			}
+			t.Fatalf("版本 %q：没有 codex.wire_api 这一项", tc.version)
+		})
 	}
 }

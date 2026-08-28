@@ -69,17 +69,19 @@ type resolved struct {
 	home        string
 	settingsErr error
 	s           settings
+	raw         map[string]any // 原样的顶层键，用来判断 aivet 还认不认得这个文件
 	creds       credentials
 	credsErr    error
 	overrides   map[string]target // profile → 覆盖的默认模型
 }
 
 func resolve(c *harness.Context) resolved {
-	r := resolved{home: filepath.Join(c.Home, ".dsh"), overrides: map[string]target{}}
+	r := resolved{home: c.Path("dsh.home"), overrides: map[string]target{}}
 	if h := c.Env("DSH_HOME"); h != "" {
 		r.home = h
 	}
 	r.settingsErr = probe.ReadYAML(filepath.Join(r.home, "settings.yaml"), &r.s)
+	_ = probe.ReadYAML(filepath.Join(r.home, "settings.yaml"), &r.raw)
 	r.credsErr = probe.ReadYAML(filepath.Join(r.home, ".credentials.yaml"), &r.creds)
 	if r.s.Default.Provider == "" {
 		r.s.Default = target{Provider: "deepseek-official", Model: "deepseek-v4-flash"}
@@ -135,7 +137,7 @@ func (r resolved) endpoint(c *harness.Context, t target) (ep probe.Endpoint, key
 		}
 		return
 	}
-	if kp, ok := harness.LookupProvider(t.Provider); ok {
+	if kp, ok := c.Provider(t.Provider); ok {
 		ep.BaseURL, ep.Protocol = kp.BaseURL, kp.Protocol
 		if n, v := harness.FirstEnv(c.Env, kp.EnvKeys...); v != "" {
 			ep.Key, keySource = v, "环境变量 "+n
@@ -168,6 +170,11 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	}
 	if r.credsErr != nil && !probe.IsNotExist(r.credsErr) {
 		b.Fail("credentials", ".credentials.yaml", r.credsErr.Error(), "")
+		return b.Checks()
+	}
+	// settings.yaml 有内容却没有这两个键 = aivet 读不懂它，
+	// 再往下就会拿内置默认（deepseek-official）去核对，而那不是用户配的东西。
+	if harness.SchemaDrift(b, h.ID(), "schema", filepath.Join(r.home, "settings.yaml"), r.raw, "llm-pi-ai", "agent-default-model") {
 		return b.Checks()
 	}
 	targets := map[string]target{"全局默认": r.s.Default}
@@ -258,7 +265,7 @@ const keyEnvName = "AIVET_GATEWAY_KEY"
 
 // Configure 写 settings.yaml 的 provider + 默认模型，key 进 .credentials.yaml。
 func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []string, err error) {
-	home := filepath.Join(c.Home, ".dsh")
+	home := c.Path("dsh.home")
 	if h := c.Env("DSH_HOME"); h != "" {
 		home = h
 	}

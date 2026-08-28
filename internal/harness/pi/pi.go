@@ -7,7 +7,6 @@ package pi
 
 import (
 	"fmt"
-	"path/filepath"
 	"regexp"
 
 	"github.com/shiftu/aivet/internal/harness"
@@ -56,6 +55,7 @@ type resolved struct {
 	settingsErr  error
 	modelsPath   string
 	models       modelsFile
+	rawModels    map[string]any // 原样的顶层键，用来判断 aivet 还认不认得这个文件
 	modelsErr    error
 	provName     string
 	model        string
@@ -69,10 +69,10 @@ type resolved struct {
 var envNameRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,}$`)
 
 func resolve(c *harness.Context) resolved {
-	dir := filepath.Join(c.Home, ".pi", "agent")
-	r := resolved{settingsPath: filepath.Join(dir, "settings.json"), modelsPath: filepath.Join(dir, "models.json")}
+	r := resolved{settingsPath: c.Path("pi.settings"), modelsPath: c.Path("pi.models")}
 	r.settingsErr = probe.ReadJSON(r.settingsPath, &r.settings)
 	r.modelsErr = probe.ReadJSON(r.modelsPath, &r.models)
+	_ = probe.ReadJSON(r.modelsPath, &r.rawModels)
 	if v, ok := r.settings["defaultProvider"].(string); ok {
 		r.provName = v
 	}
@@ -80,7 +80,7 @@ func resolve(c *harness.Context) resolved {
 		r.model = v
 	}
 	var auth map[string]any
-	if probe.ReadJSON(filepath.Join(dir, "auth.json"), &auth) == nil {
+	if probe.ReadJSON(c.Path("pi.auth"), &auth) == nil {
 		_, r.hasAuth = auth[r.provName]
 	}
 	if p, ok := r.models.Providers[r.provName]; ok {
@@ -94,7 +94,7 @@ func resolve(c *harness.Context) resolved {
 		}
 		return r
 	}
-	if kp, ok := harness.LookupProvider(r.provName); ok {
+	if kp, ok := c.Provider(r.provName); ok {
 		r.prov = providerDef{BaseURL: kp.BaseURL, API: apiFor(kp.Protocol)}
 		if n, v := harness.FirstEnv(c.Env, kp.EnvKeys...); v != "" {
 			r.key, r.keySource = v, "环境变量 "+n
@@ -141,13 +141,19 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		b.Fail("models_json", "models.json", r.modelsErr.Error(), "JSON 坏了；aivet setup --force 重写")
 		return b.Checks()
 	}
+	// models.json 的存在意义就是声明 providers。里面没有这个键 = aivet 读不懂它。
+	if harness.SchemaDrift(b, h.ID(), "schema", r.modelsPath, r.rawModels, "providers") {
+		return b.Checks()
+	}
 	if r.provName == "" {
-		b.Warn("provider", "提供方", "没设 defaultProvider", "aivet setup")
+		b.Warn("provider", "提供方", "settings.json 里没有 defaultProvider",
+			"没选过模型的话跑 aivet setup。如果你确实选过，那可能是 pi 换了这个字段的名字 —— "+
+				"用 aivet check pi --live 实测，并往 ~/.aivet/knowledge.json 补一条（aivet knowledge --init）")
 		return b.Checks()
 	}
 	if r.custom {
 		b.OK("provider", "提供方", fmt.Sprintf("%s（models.json）· %s · %s", r.provName, r.prov.BaseURL, r.prov.API))
-	} else if _, ok := harness.LookupProvider(r.provName); ok {
+	} else if _, ok := c.Provider(r.provName); ok {
 		b.OK("provider", "提供方", r.provName+"（内置）")
 	} else {
 		b.Warn("provider", "提供方", r.provName+"：models.json 里没有它，aivet 也不认识", "--live 实测")
@@ -211,8 +217,7 @@ const providerName = "gateway"
 
 // Configure 写 models.json 的 provider + settings.json 的默认值。
 func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []string, err error) {
-	dir := filepath.Join(c.Home, ".pi", "agent")
-	mp, sp := filepath.Join(dir, "models.json"), filepath.Join(dir, "settings.json")
+	mp, sp := c.Path("pi.models"), c.Path("pi.settings")
 	mf := map[string]any{}
 	_ = probe.ReadJSON(mp, &mf)
 	provs, _ := mf["providers"].(map[string]any)

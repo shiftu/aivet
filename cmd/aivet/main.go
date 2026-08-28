@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/shiftu/aivet/internal/harness/dsh"
 	"github.com/shiftu/aivet/internal/harness/hermes"
 	"github.com/shiftu/aivet/internal/harness/pi"
+	"github.com/shiftu/aivet/internal/knowledge"
 	"github.com/shiftu/aivet/internal/platform"
 	"github.com/shiftu/aivet/internal/probe"
 	"github.com/shiftu/aivet/internal/report"
@@ -79,6 +81,8 @@ func main() {
 		code = runSkill(args)
 	case "env":
 		code = runEnv(ctx)
+	case "knowledge", "know":
+		code = runKnowledge(args)
 	case "version":
 		fmt.Printf("aivet %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
 	case "help":
@@ -210,6 +214,11 @@ func runReport(ctx context.Context, hs []harness.Harness, live, offline bool, pr
 	c.Live, c.Offline = live, offline
 	c.Log = pr.Line
 	r := report.Report{AivetVersion: version, OS: runtime.GOOS, Arch: runtime.GOARCH, Time: time.Now(), Live: live}
+	// 用户补的知识没读进来，这份报告就是拿内置知识出的 —— 他以为改过的地方其实没生效。
+	// 不说出来的话，这是最难察觉的一种「报告不可信」。
+	if err := c.K().LoadErr; err != nil {
+		r.Notes = append(r.Notes, fmt.Sprintf("%s 读不了（%v）——这份报告用的是内置知识，你补的那些没生效", c.K().UserFile, err))
+	}
 	for _, h := range hs {
 		r.Tools = append(r.Tools, harness.Run(c, h))
 	}
@@ -437,6 +446,101 @@ func runSkill(args []string) int {
 		pr.Line("ok", t+" → "+p)
 	}
 	fmt.Fprintln(pr.W, pr.P.Dim("\n  之后在 agent 里说「用 aivet 检查一下我的 AI 环境」即可。"))
+	return 0
+}
+
+// runKnowledge 展示 / 初始化那份「会过时的知识」。
+//
+// 存在的意义：aivet 对外部工具的了解总会落后于工具本身。与其让用户等发版，
+// 不如让他看得见 aivet 现在以为什么是真的，并且能就地改掉。
+func runKnowledge(args []string) int {
+	fs := newFlagSet("knowledge")
+	asJSON := fs.Bool("json", false, "输出全部生效知识（给 agent）")
+	doInit := fs.Bool("init", false, "生成 ~/.aivet/knowledge.json 模板")
+	if err := fs.Parse(reorder(args)); err != nil {
+		return parseErr("knowledge", err)
+	}
+	home := probe.Home()
+	k := knowledge.Load(home)
+	if *doInit {
+		return initKnowledge(k)
+	}
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(k.File)
+		return 0
+	}
+	pr := newPrinter(false)
+	pr.Banner(version, platform.Label(), false)
+	fmt.Fprintln(pr.W, pr.P.Dim("\n  aivet 对外部工具的了解 —— 这些事实会随工具升级而过时，可以就地改。"))
+
+	pr.Section("来源")
+	pr.Line("ok", fmt.Sprintf("内置    %d 个提供方 · %d 个模型别名 · %d 处配置路径 · %d 条版本断言",
+		len(k.Providers), len(k.ClaudeAliases), len(k.Paths), len(k.Versions)))
+	switch {
+	case k.LoadErr != nil:
+		pr.Line("fail", k.UserFile+" 读不了："+k.LoadErr.Error())
+		pr.Line("info", "在修好之前，aivet 用的都是内置知识。")
+	case k.Loaded:
+		pr.Line("ok", k.UserFile+" 覆盖了 "+strings.Join(k.Overridden, "、"))
+	default:
+		pr.Line("skip", "没有用户补丁（"+k.UserFile+"）")
+		pr.Line("info", "工具改了配置位置、或你想加一个提供方：aivet knowledge --init")
+	}
+
+	pr.Section("配置文件位置")
+	keys := make([]string, 0, len(k.Paths))
+	for key := range k.Paths {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		cands := k.Candidates(key)
+		used, status := k.Path(key), "skip"
+		note := "没找到"
+		if probe.Exists(used) {
+			status, note = "ok", "在"
+		}
+		if len(cands) > 1 {
+			note += fmt.Sprintf("（%d 个候选）", len(cands))
+		}
+		pr.Line(status, fmt.Sprintf("%s %s  %s", ui.Pad(key, 17), ui.Pad(used, 42), pr.P.Dim(note)))
+	}
+
+	pr.Section("版本断言")
+	vkeys := make([]string, 0, len(k.Versions))
+	for key := range k.Versions {
+		vkeys = append(vkeys, key)
+	}
+	sort.Strings(vkeys)
+	for _, key := range vkeys {
+		pr.Line("info", fmt.Sprintf("%s %s", ui.Pad(key, 34), k.Versions[key]))
+	}
+	fmt.Fprintln(pr.W, pr.P.Dim("\n  提供方清单太长，看全部：aivet knowledge --json\n"))
+	return 0
+}
+
+func initKnowledge(k *knowledge.K) int {
+	pr := newPrinter(false)
+	if probe.Exists(k.UserFile) {
+		// 这里面是用户手写的东西，覆盖了就找不回来了 —— 备份机制管的是 aivet 改的文件，
+		// 不该拿来给「本来就该由用户掌管」的文件擦屁股。
+		pr.Line("warn", k.UserFile+" 已经存在，不覆盖。")
+		pr.Line("info", "直接编辑它；改完跑 aivet knowledge 看有没有生效。")
+		return 0
+	}
+	b, err := json.MarshalIndent(knowledge.Template(), "", "  ")
+	if err != nil {
+		pr.Line("fail", err.Error())
+		return 1
+	}
+	if err := probe.WriteFile(k.UserFile, append(b, '\n')); err != nil {
+		pr.Line("fail", err.Error())
+		return 1
+	}
+	pr.Line("ok", "已生成 "+k.UserFile)
+	pr.Line("info", "里面是带说明的样例。只留你要改的那几条，其余删掉即可 —— 没写的用内置的。")
 	return 0
 }
 

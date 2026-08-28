@@ -179,6 +179,8 @@ func (r Renderer) JSON(cmds []Command) error {
 				"3. 不带 fix 字段的：按 hint 处理；装软件前先问用户",
 				"4. aivet check --json 复验，直到没有 fail",
 				"5. 判断不了通不通的（hint 里提到 --live 时）：aivet check <工具> --live",
+				"6. 出现 id 以 .schema 结尾的项：aivet 读不懂那个配置文件了（工具改了格式），" +
+					"它下面的检查结果不可信 —— 用 --live 实测，别照着那些结果下结论",
 			},
 		},
 	}

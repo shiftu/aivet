@@ -4,7 +4,10 @@
 // JSON 形态是给 agent 用的稳定契约：`aivet check --json`。
 package report
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Status 是单条检查的结论。
 type Status string
@@ -44,7 +47,10 @@ type Report struct {
 	Arch         string    `json:"arch"`
 	Time         time.Time `json:"time"`
 	Live         bool      `json:"live"`
-	Tools        []Tool    `json:"tools"`
+	// Notes 是与具体工具无关、但会影响这份报告可信度的事情，
+	// 目前只有一件：用户的 knowledge.json 读不了（那意味着报告是用内置知识出的）。
+	Notes []string `json:"notes,omitempty"`
+	Tools []Tool   `json:"tools"`
 }
 
 // Counts 汇总各状态数量。
@@ -84,6 +90,22 @@ func (r Report) ExitCode() int {
 		return 1
 	}
 	return 0
+}
+
+// Unreadable 列出「aivet 读不懂那个配置文件」的项（id 以 .schema 结尾）。
+//
+// 单拎出来是因为它改变的是整份报告的可信度，不是某一项的结论：
+// 有这种项在，「都能用」这句话就没有依据 —— 那部分根本没查成。
+func (r Report) Unreadable() []Check {
+	var out []Check
+	for _, t := range r.Tools {
+		for _, c := range t.Checks {
+			if c.Status != OK && strings.HasSuffix(c.ID, ".schema") {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
 }
 
 // Fixable 列出报告里所有带 fixer 的检查项。

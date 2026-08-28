@@ -8,7 +8,6 @@ package claude
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/shiftu/aivet/internal/harness"
@@ -17,16 +16,11 @@ import (
 	"github.com/shiftu/aivet/internal/report"
 )
 
-// modelAliasEnv 是 Claude Code 三个内置别名，以及把它们重定向到网关模型的环境变量。
-//
 // 别名不是模型名：`model: "sonnet"` 会被 Claude Code 解析成它内置的某个
 // claude-sonnet-… id 再发出去，那个 id 我们从配置里看不到。所以走网关时
-// 要么用 ANTHROPIC_MODEL 直接写死网关上的名字，要么用下面这些变量把别名映射过去。
-var modelAliasEnv = map[string]string{
-	"sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
-	"opus":   "ANTHROPIC_DEFAULT_OPUS_MODEL",
-	"haiku":  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-}
+// 要么用 ANTHROPIC_MODEL 直接写死网关上的名字，要么用重定向环境变量把别名映射过去。
+// 别名表在 internal/knowledge（claude_model_aliases）—— Claude Code 加了新别名，
+// 用户补一行就行，不必等 aivet 发版。
 
 // stripQualifier 去掉 claude-fable-5[1m] 这类结尾的能力后缀 —— 它不属于模型名。
 func stripQualifier(m string) string {
@@ -71,7 +65,7 @@ type resolved struct {
 }
 
 func resolve(c *harness.Context) resolved {
-	r := resolved{settingsPath: filepath.Join(c.Home, ".claude", "settings.json"), envInFile: map[string]string{}}
+	r := resolved{settingsPath: c.Path("claude.settings"), envInFile: map[string]string{}}
 	r.settingsErr = probe.ReadJSON(r.settingsPath, &r.settings)
 	if envAny, ok := r.settings["env"].(map[string]any); ok {
 		for k, v := range envAny {
@@ -103,18 +97,18 @@ func resolve(c *harness.Context) resolved {
 		r.key, r.keySource = "(apiKeyHelper)", "settings.json apiKeyHelper 脚本"
 	}
 	var state map[string]any
-	r.stateErr = probe.ReadJSON(filepath.Join(c.Home, ".claude.json"), &state)
+	r.stateErr = probe.ReadJSON(c.Path("claude.state"), &state)
 	if r.stateErr == nil {
 		r.onboarded, _ = state["hasCompletedOnboarding"].(bool)
 		if acct, ok := state["oauthAccount"].(map[string]any); ok && len(acct) > 0 {
 			r.hasOAuth = true
 		}
 	}
-	if probe.Exists(filepath.Join(c.Home, ".claude", ".credentials.json")) {
+	if probe.Exists(c.Path("claude.creds")) {
 		r.hasOAuth = true
 	}
 	if base := strings.ToLower(stripQualifier(r.model)); base != "" {
-		if envName, isAlias := modelAliasEnv[base]; isAlias {
+		if envName, isAlias := c.K().AliasEnv(base); isAlias {
 			r.alias, r.aliasEnv = base, envName
 			r.effModel, _ = pick(envName)
 		} else {
@@ -131,8 +125,15 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	switch {
 	case r.settingsErr == nil:
 		b.OK("settings", "settings.json", r.settingsPath)
+	case probe.IsNotExist(r.settingsErr) && (r.baseURL != "" || r.key != "" || r.hasOAuth):
+		b.OK("settings", "settings.json", "不存在——配置来自 shell 环境变量或官方登录")
 	case probe.IsNotExist(r.settingsErr):
-		b.OK("settings", "settings.json", "不存在，用默认值")
+		// 文件不在、shell 里也没有、还没登录 —— 三样都空的时候，「不存在」就不再是
+		// 「用默认值」这么无害了：也可能是 Claude Code 换了配置文件的位置，
+		// 而 aivet 还在看老地方。报成 OK 等于替一个查不到的东西打包票。
+		b.Warn("settings", "settings.json", "在 "+r.settingsPath+" 没找到，shell 里也没有 ANTHROPIC_* ",
+			"没配过就跑 aivet setup。如果你确实配过 Claude Code，那可能是它换了配置文件位置 —— "+
+				"把真实路径加进 ~/.aivet/knowledge.json 的 paths（aivet knowledge --init 生成模板）")
 	default:
 		b.Fail("settings", "settings.json", r.settingsErr.Error(), "文件被手改坏了；用 aivet setup 重写，或删掉重来")
 		return b.Checks()
@@ -218,7 +219,7 @@ func (h H) Fixers() []harness.Fixer {
 }
 
 func fixOnboarding(c *harness.Context, dry bool) ([]string, error) {
-	p := filepath.Join(c.Home, ".claude.json")
+	p := c.Path("claude.state")
 	if dry {
 		return []string{p}, nil
 	}
@@ -234,7 +235,7 @@ func fixOnboarding(c *harness.Context, dry bool) ([]string, error) {
 }
 
 func fixBaseV1(c *harness.Context, dry bool) ([]string, error) {
-	p := filepath.Join(c.Home, ".claude", "settings.json")
+	p := c.Path("claude.settings")
 	if dry {
 		return []string{p}, nil
 	}
@@ -256,7 +257,7 @@ func fixBaseV1(c *harness.Context, dry bool) ([]string, error) {
 
 // Configure 把网关写进 settings.json env，并跳过首次向导。
 func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []string, err error) {
-	sp := filepath.Join(c.Home, ".claude", "settings.json")
+	sp := c.Path("claude.settings")
 	s := map[string]any{}
 	if err := probe.ReadJSON(sp, &s); err != nil && !probe.IsNotExist(err) {
 		return nil, nil, err
@@ -274,7 +275,8 @@ func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []strin
 		delete(env, "ANTHROPIC_API_KEY")
 		env["ANTHROPIC_MODEL"] = p.Model
 		// /model 里的 sonnet/opus/haiku 别名也指到同一个模型，免得学员切一下就 404。
-		for _, k := range []string{"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"} {
+		// 别名表从 knowledge 拿：Claude Code 新加别名时补一行就能一起写进去。
+		for _, k := range c.K().ClaudeAliases {
 			env[k] = p.Model
 		}
 		s["env"] = env

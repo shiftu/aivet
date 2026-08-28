@@ -70,6 +70,9 @@ func (pr Printer) Summary(r report.Report) {
 	c := r.Count()
 	fmt.Fprintln(pr.W)
 	fmt.Fprintln(pr.W, pr.P.Rule(pr.Wid))
+	for _, n := range r.Notes {
+		fmt.Fprintf(pr.W, " %s %s\n", pr.P.Glyph("warn"), pr.P.Yellow(wrap(n, pr.Wid-4, 3)))
+	}
 	parts := []string{pr.P.Green(fmt.Sprintf("%d 通过", c.OK))}
 	if c.Warn > 0 {
 		parts = append(parts, pr.P.Yellow(fmt.Sprintf("%d 提醒", c.Warn)))
@@ -84,6 +87,11 @@ func (pr Printer) Summary(r report.Report) {
 	switch {
 	case c.Fail > 0:
 		fmt.Fprintf(pr.W, "%s\n", pr.P.Red("有工具用不了。")+"先试 "+pr.P.Bold("aivet fix")+"，修不掉的交给能用的 agent："+pr.P.Bold("aivet ask"))
+	case len(r.Unreadable()) > 0:
+		// 有配置文件 aivet 读不懂，就没资格说「都能用」——
+		// 那部分根本没查成，说能用是替一个查不到的东西打包票。
+		fmt.Fprintf(pr.W, "%s\n", pr.P.Yellow("有配置 aivet 读不懂（见上面的「配置结构」），那几件工具的结论不作数。")+
+			"实测一下："+pr.P.Bold("aivet check <工具> --live"))
 	case c.Warn > 0:
 		fmt.Fprintf(pr.W, "%s\n", pr.P.Yellow("都能用，但有几处值得看一眼。"))
 	default:

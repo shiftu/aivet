@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/shiftu/aivet/internal/knowledge"
 	"github.com/shiftu/aivet/internal/platform"
 	"github.com/shiftu/aivet/internal/probe"
 	"github.com/shiftu/aivet/internal/report"
@@ -22,7 +23,25 @@ type Context struct {
 	Env      func(string) string // 读环境变量（可注入，便于测试）
 	Gateways *probe.GatewayCache
 	Log      func(status, text string) // 进度输出（可为 nil）
+	// Knowledge 是那些会过时的外部事实（提供方地址、配置文件位置、版本断言）。
+	// 留空则首次用到时按 Home 现加载 —— 测试可以直接塞一份假的进来。
+	Knowledge *knowledge.K
 }
+
+// K 返回生效的知识，必要时现加载。
+func (c *Context) K() *knowledge.K {
+	if c.Knowledge == nil {
+		c.Knowledge = knowledge.Load(c.Home)
+	}
+	return c.Knowledge
+}
+
+// Path 按知识里的候选列表定位一个配置文件：返回第一个存在的，
+// 都不存在时返回第一个候选（报「不存在」时该指向默认位置）。
+//
+// 走这里而不是直接 filepath.Join，是为了让「工具换了配置文件位置」这件事
+// 可以由用户补一条 knowledge 解决，而不必等 aivet 发新版。
+func (c *Context) Path(key string) string { return c.K().Path(key) }
 
 // NewContext 用真实环境构造。
 func NewContext(ctx context.Context) *Context {

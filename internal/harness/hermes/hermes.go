@@ -10,7 +10,6 @@ package hermes
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/shiftu/aivet/internal/harness"
@@ -70,14 +69,14 @@ func sub(m map[string]any, k string) map[string]any {
 }
 
 func resolve(c *harness.Context) resolved {
-	r := resolved{cfgPath: filepath.Join(c.Home, ".hermes", "config.yaml")}
+	r := resolved{cfgPath: c.Path("hermes.config")}
 	r.cfgErr = probe.ReadYAML(r.cfgPath, &r.cfg)
 	if m := sub(r.cfg, "model"); m != nil {
 		r.model, r.provName = str(m, "default"), str(m, "provider")
 	} else {
 		r.model, r.provName = str(r.cfg, "model"), str(r.cfg, "provider")
 	}
-	dotenv := probe.ParseDotenv(filepath.Join(c.Home, ".hermes", ".env"))
+	dotenv := probe.ParseDotenv(c.Path("hermes.env"))
 	env := func(k string) string {
 		if v := c.Env(k); v != "" {
 			return v
@@ -119,7 +118,7 @@ func resolve(c *harness.Context) resolved {
 		}
 		return r
 	}
-	if kp, ok := harness.LookupProvider(r.provName); ok {
+	if kp, ok := c.Provider(r.provName); ok {
 		r.baseURL = kp.BaseURL
 		r.apiMode = string(kp.Protocol)
 		if n, v := harness.FirstEnv(env, kp.EnvKeys...); v != "" {
@@ -142,13 +141,18 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		b.Fail("config", "config.yaml", r.cfgErr.Error(), "YAML 缩进错了？用 aivet setup --force 重写")
 		return b.Checks()
 	}
+	// config.yaml 就是用来声明模型和提供方的。里面一个 aivet 认识的键都没有，
+	// 那不是「用户没配」，是 aivet 读不懂这个文件 —— 得说出来，不能往下装作查过了。
+	if harness.SchemaDrift(b, h.ID(), "schema", r.cfgPath, r.cfg, "model", "provider", "providers") {
+		return b.Checks()
+	}
 	if r.provName == "" {
 		b.Fail("provider", "提供方", "config.yaml 里没有 model.provider", "hermes model 选一个，或 aivet setup")
 		return b.Checks()
 	}
 	if r.custom {
 		b.OK("provider", "提供方", fmt.Sprintf("%s（自定义）· %s · %s", r.provName, r.baseURL, r.apiMode))
-	} else if _, ok := harness.LookupProvider(r.provName); ok {
+	} else if _, ok := c.Provider(r.provName); ok {
 		b.OK("provider", "提供方", r.provName+"（内置）")
 	} else {
 		b.Warn("provider", "提供方", fmt.Sprintf("%s：既不在 providers 段，aivet 也不认识它", r.provName), "如果 hermes 自己能跑就没事；--live 试试")
@@ -197,7 +201,7 @@ const keyEnvName = "AIVET_GATEWAY_KEY"
 
 // Configure 写 providers.gateway + model 段，key 进 ~/.hermes/.env。
 func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []string, err error) {
-	cfgPath := filepath.Join(c.Home, ".hermes", "config.yaml")
+	cfgPath := c.Path("hermes.config")
 	cfg := map[string]any{}
 	if err := probe.ReadYAML(cfgPath, &cfg); err != nil && !probe.IsNotExist(err) {
 		return nil, nil, err
@@ -233,7 +237,7 @@ func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []strin
 	if err := probe.WriteYAML(cfgPath, cfg); err != nil {
 		return nil, nil, err
 	}
-	envPath := filepath.Join(c.Home, ".hermes", ".env")
+	envPath := c.Path("hermes.env")
 	if err := probe.UpsertDotenv(envPath, keyEnvName, p.Key); err != nil {
 		return nil, nil, err
 	}

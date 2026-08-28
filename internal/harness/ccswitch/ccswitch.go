@@ -28,7 +28,7 @@ func (H) ID() string    { return "ccswitch" }
 func (H) Label() string { return "cc-switch" }
 
 func (H) Detect(c *harness.Context) harness.Detection {
-	dir := filepath.Join(c.Home, ".cc-switch")
+	dir := c.Path("ccswitch.home")
 	p, ok := probe.Which("cc-switch")
 	if !ok && !probe.Exists(dir) {
 		return harness.Detection{}
@@ -51,7 +51,7 @@ type current struct {
 
 func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	b := harness.NewBuilder(h.ID())
-	dir := filepath.Join(c.Home, ".cc-switch")
+	dir := c.Path("ccswitch.home")
 	var settings map[string]any
 	if err := probe.ReadJSON(filepath.Join(dir, "settings.json"), &settings); err != nil {
 		if probe.IsNotExist(err) {
@@ -186,7 +186,7 @@ func actualBase(c *harness.Context, app string) string {
 			return v
 		}
 		var s map[string]any
-		if probe.ReadJSON(filepath.Join(c.Home, ".claude", "settings.json"), &s) == nil {
+		if probe.ReadJSON(c.Path("claude.settings"), &s) == nil {
 			if env, ok := s["env"].(map[string]any); ok {
 				if v, ok := env["ANTHROPIC_BASE_URL"].(string); ok {
 					return v
@@ -198,7 +198,7 @@ func actualBase(c *harness.Context, app string) string {
 			ModelProvider  string                    `toml:"model_provider"`
 			ModelProviders map[string]map[string]any `toml:"model_providers"`
 		}
-		if probe.ReadTOML(filepath.Join(c.Home, ".codex", "config.toml"), &cfg) == nil {
+		if probe.ReadTOML(c.Path("codex.config"), &cfg) == nil {
 			if p, ok := cfg.ModelProviders[cfg.ModelProvider]; ok {
 				if v, ok := p["base_url"].(string); ok {
 					return v
@@ -207,7 +207,7 @@ func actualBase(c *harness.Context, app string) string {
 		}
 	case "hermes":
 		var cfg map[string]any
-		if probe.ReadYAML(filepath.Join(c.Home, ".hermes", "config.yaml"), &cfg) == nil {
+		if probe.ReadYAML(c.Path("hermes.config"), &cfg) == nil {
 			prov := ""
 			if m, ok := cfg["model"].(map[string]any); ok {
 				prov, _ = m["provider"].(string)

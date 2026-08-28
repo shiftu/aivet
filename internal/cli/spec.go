@@ -80,6 +80,8 @@ func Commands(fixIDs []string) []Command {
 				"提醒（▲）不影响退出码 —— 能用就是能用。只有故障（✘）才让退出码变 1。",
 				"配置里的 key 一律脱敏，报告可以放心贴给别人或喂给 agent。",
 				"每次体检都会把完整报告存到 ~/.aivet/last-report.json。",
+				"看到「配置结构」这一项，说明工具改了配置格式而 aivet 的知识停在旧版 —— " +
+					"底下那些检查等于没查。用 --live 实测，或用 aivet knowledge 补一条。",
 			},
 		},
 		{
@@ -166,6 +168,30 @@ func Commands(fixIDs []string) []Command {
 			Long:    "还没装齐工具时先跑这个 —— 它会按你的操作系统给出每件工具的安装命令。",
 			Examples: []Example{
 				{"aivet env", "看看这台机器上装了什么、还缺什么"},
+			},
+		},
+		{
+			Name: "knowledge", Aliases: []string{"know"}, Group: "其他",
+			Summary: "查看/修改 aivet 对外部工具的了解（配置在哪、提供方地址、版本断言）",
+			Usage:   "aivet knowledge [选项]",
+			Long: "aivet 要读懂六件工具的配置，就得知道它们的配置文件在哪、字段叫什么、\n" +
+				"哪个版本删掉了哪个值。这些事实会随工具升级而过时 —— 而过时的表现往往不是报错，\n" +
+				"是 aivet 看着错的地方报「一切正常」。\n\n" +
+				"所以它们不写死在代码里：这个命令让你看见 aivet 现在以为什么是真的，\n" +
+				"并且能在 ~/.aivet/knowledge.json 里就地改掉，不用等 aivet 发新版。\n" +
+				"没写的部分继续用内置的。",
+			Flags: []Flag{
+				{Name: "init", Desc: "生成 ~/.aivet/knowledge.json 模板（已存在则不覆盖）"},
+				{Name: "json", Desc: "输出全部生效知识（给 agent）"},
+			},
+			Examples: []Example{
+				{"aivet knowledge", "看 aivet 现在认为配置文件在哪、哪些被你改过"},
+				{"aivet knowledge --init", "生成模板，然后编辑它"},
+				{"aivet knowledge --json", "给 agent：完整的生效知识"},
+			},
+			Notes: []string{
+				"工具升级换了配置位置时，往对应 paths 键的最前面加一条新路径 —— 内置的仍留作兜底。",
+				"体检报告里出现「配置结构」提醒，通常就是该来这里补一条的信号。",
 			},
 		},
 		{
