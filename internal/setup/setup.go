@@ -130,6 +130,19 @@ func Run(c *harness.Context, all []harness.Harness, pr ui.Printer, in io.Reader,
 	pr.Line("ok", ping.Detail)
 
 	plan := harness.Plan{BaseURL: base, Key: key, Model: model, Force: opt.Force}
+	// 上下文长度不猜：网关清单里给了就照抄，给不出就留 0，各工具退回保守默认值。
+	// 猜小了工具会白白截断长上下文，而这个数一旦写进配置就没人会再去核对。
+	infos, listRes := c.Gateways.ModelInfos(c.Ctx, probe.Endpoint{BaseURL: base, Key: key})
+	if listRes.OK {
+		if mi, ok := probe.FindModel(infos, model); ok {
+			plan.ContextLength, plan.MaxTokens = mi.ContextLength, mi.MaxCompletionTokens
+		}
+	}
+	if plan.ContextLength > 0 {
+		pr.Line("ok", fmt.Sprintf("上下文 %d · 最大输出 %d（网关清单给的）", plan.Context(), plan.MaxOut()))
+	} else {
+		pr.Line("warn", fmt.Sprintf("网关清单没给上下文长度，按保守默认值写：%d / %d", plan.Context(), plan.MaxOut()))
+	}
 	pr.Section("④ 写配置")
 	wantTool := map[string]bool{}
 	for _, t := range opt.Tools {

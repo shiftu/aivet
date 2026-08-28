@@ -212,6 +212,12 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		b.OK(id, label, fmt.Sprintf("%s / %s · key %s（%s）", t.Provider, t.Model, probe.MaskKey(ep.Key), keySource))
 		if first {
 			harness.ProbeGateway(c, b, ep, t.Model)
+			// 声明的 models 是用户能切到的菜单；profile 的覆盖模型上面每条已经单独验过了。
+			slots := make([]harness.ModelSlot, 0, len(declared))
+			for _, m := range declared {
+				slots = append(slots, harness.Slot("声明的", m))
+			}
+			harness.CheckOtherModels(c, b, ep, t.Model, slots)
 		}
 		first = false
 	}
@@ -294,7 +300,7 @@ func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []strin
 		"apiKeyEnv":   keyEnvName,
 		"api":         "openai-completions",
 		"baseURL":     base,
-		"models":      []any{map[string]any{"id": p.Model, "contextWindow": 128000, "maxTokens": 16384}},
+		"models":      []any{map[string]any{"id": p.Model, "contextWindow": p.Context(), "maxTokens": p.MaxOut()}},
 	}
 	llm["providers"] = provs
 	raw["llm-pi-ai"] = llm

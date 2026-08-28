@@ -71,7 +71,34 @@ type Plan struct {
 	BaseURL string // OpenAI 兼容网关地址，带或不带 /v1 都行
 	Key     string
 	Model   string
-	Force   bool // 覆盖已有配置（默认只补缺）
+	// ContextLength / MaxTokens 来自网关模型清单；为 0 表示网关没给。
+	// 声明式的工具（hermes/pi/dsh）要把这两个数写进配置，写小了会白白截断长上下文，
+	// 所以能问到真数就别猜。
+	ContextLength int
+	MaxTokens     int
+	Force         bool // 覆盖已有配置（默认只补缺）
+}
+
+// 网关没给元数据时的保守退路 —— 宁可小，也不要让工具按一个虚高的值去截断。
+const (
+	fallbackContext   = 128000
+	fallbackMaxTokens = 16384
+)
+
+// Context 是要写进配置的上下文长度：网关给了就用它的。
+func (p Plan) Context() int {
+	if p.ContextLength > 0 {
+		return p.ContextLength
+	}
+	return fallbackContext
+}
+
+// MaxOut 是要写进配置的最大输出长度：网关给了就用它的。
+func (p Plan) MaxOut() int {
+	if p.MaxTokens > 0 {
+		return p.MaxTokens
+	}
+	return fallbackMaxTokens
 }
 
 // Fixer 是一个可自动执行的修复。

@@ -193,10 +193,22 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		} else if r.apiMode == "anthropic" {
 			proto = probe.Anthropic
 		}
-		harness.ProbeGateway(c, b, probe.Endpoint{BaseURL: r.baseURL, Key: r.key, Protocol: proto}, r.model)
+		ep := probe.Endpoint{BaseURL: r.baseURL, Key: r.key, Protocol: proto}
+		harness.ProbeGateway(c, b, ep, r.model)
+		// providers.<p>.models 是用户在 hermes 里能切到的菜单，切过去就会真发出去。
+		harness.CheckOtherModels(c, b, ep, r.model, slotsOf("声明的", r.models))
 	}
 	harness.LiveRun(c, b, "Hermes", d.Path, "-z", harness.LivePrompt)
 	return b.Checks()
+}
+
+// slotsOf 把一串模型名包成副槽。
+func slotsOf(from string, models []string) []harness.ModelSlot {
+	out := make([]harness.ModelSlot, 0, len(models))
+	for _, m := range models {
+		out = append(out, harness.Slot(from, m))
+	}
+	return out
 }
 
 func (H) Fixers() []harness.Fixer { return nil }
@@ -229,7 +241,7 @@ func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []strin
 		"key_env":       keyEnvName,
 		"default_model": p.Model,
 		"models": map[string]any{
-			p.Model: map[string]any{"context_length": 128000, "max_completion_tokens": 32000},
+			p.Model: map[string]any{"context_length": p.Context(), "max_completion_tokens": p.MaxOut()},
 		},
 	}
 	cfg["providers"] = providers

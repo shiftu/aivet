@@ -64,6 +64,7 @@ type resolved struct {
 	key          string
 	keySource    string
 	hasAuth      bool
+	enabled      []string // settings.json enabledModels：用户在 pi 里 Ctrl+P 能切到的那些
 }
 
 var envNameRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,}$`)
@@ -78,6 +79,13 @@ func resolve(c *harness.Context) resolved {
 	}
 	if v, ok := r.settings["defaultModel"].(string); ok {
 		r.model = v
+	}
+	if xs, ok := r.settings["enabledModels"].([]any); ok {
+		for _, x := range xs {
+			if s, ok := x.(string); ok {
+				r.enabled = append(r.enabled, s)
+			}
+		}
 	}
 	var auth map[string]any
 	if probe.ReadJSON(c.Path("pi.auth"), &auth) == nil {
@@ -188,10 +196,24 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		return b.Checks()
 	}
 	if proto, ok := protocolFor(r.prov.API); ok && r.key != "" && r.prov.BaseURL != "" {
-		harness.ProbeGateway(c, b, probe.Endpoint{BaseURL: r.prov.BaseURL, Key: r.key, Protocol: proto}, r.model)
+		ep := probe.Endpoint{BaseURL: r.prov.BaseURL, Key: r.key, Protocol: proto}
+		harness.ProbeGateway(c, b, ep, r.model)
+		// enabledModels 是用户挑出来、在 pi 里 Ctrl+P 循环切换的那几个 —— 最可能被切到。
+		// models.json 里声明的那一大串是目录（常由 cc-switch fetch-models 灌进来），
+		// 逐条报出来只会淹掉真问题，所以不查。
+		harness.CheckOtherModels(c, b, ep, r.model, slotsOf("已启用", r.enabled))
 	}
 	harness.LiveRun(c, b, "pi", d.Path, "-p", "--no-session", harness.LivePrompt)
 	return b.Checks()
+}
+
+// slotsOf 把一串模型名包成副槽。
+func slotsOf(from string, models []string) []harness.ModelSlot {
+	out := make([]harness.ModelSlot, 0, len(models))
+	for _, m := range models {
+		out = append(out, harness.Slot(from, m))
+	}
+	return out
 }
 
 func (h H) Fixers() []harness.Fixer {
@@ -232,7 +254,7 @@ func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []strin
 		base += "/v1"
 	}
 	provs[providerName] = providerDef{Name: "aivet 配置的网关", BaseURL: base, API: "openai-completions", APIKey: p.Key,
-		Models: []modelDef{{ID: p.Model, Name: p.Model, ContextWindow: 128000, MaxTokens: 16384}}}
+		Models: []modelDef{{ID: p.Model, Name: p.Model, ContextWindow: p.Context(), MaxTokens: p.MaxOut()}}}
 	mf["providers"] = provs
 	if _, err := probe.Backup(mp); err != nil {
 		return nil, nil, err

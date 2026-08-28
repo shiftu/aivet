@@ -42,7 +42,8 @@ func TestListModelsAndPingAgainstFakeGateway(t *testing.T) {
 	}))
 	defer srv.Close()
 	ctx := context.Background()
-	ids, pr := ListModels(ctx, Endpoint{BaseURL: srv.URL + "/v1", Key: "k"})
+	infos, pr := ListModels(ctx, Endpoint{BaseURL: srv.URL + "/v1", Key: "k"})
+	ids := ModelIDs(infos)
 	if !pr.OK || len(ids) != 2 || !HasModel(ids, "m2") {
 		t.Fatalf("models: %v %+v", ids, pr)
 	}

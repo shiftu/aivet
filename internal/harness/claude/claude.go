@@ -55,10 +55,11 @@ type resolved struct {
 	baseSource   string
 	key          string
 	keySource    string
-	model        string // 配置里写的那个（可能是别名）
-	alias        string // 是 sonnet/opus/haiku 之一时，这里是别名名字
-	aliasEnv     string // 该别名对应的映射环境变量名
-	effModel     string // 真正会发给网关的模型名；别名没映射时为空
+	model        string            // 配置里写的那个（可能是别名）
+	alias        string            // 是 sonnet/opus/haiku 之一时，这里是别名名字
+	aliasEnv     string            // 该别名对应的映射环境变量名
+	effModel     string            // 真正会发给网关的模型名；别名没映射时为空
+	aliasModels  map[string]string // 别名 → 该别名 env 里映射到的模型（设了才有）
 	hasOAuth     bool
 	onboarded    bool
 	stateErr     error
@@ -106,6 +107,14 @@ func resolve(c *harness.Context) resolved {
 	}
 	if probe.Exists(c.Path("claude.creds")) {
 		r.hasOAuth = true
+	}
+	// 三个别名各自可以指到不同模型 —— 用户在 /model 里切一下就会发出去，
+	// 只验当前那一个等于只验了三分之一。
+	r.aliasModels = map[string]string{}
+	for alias, envName := range c.K().ClaudeAliases {
+		if v, _ := pick(envName); v != "" {
+			r.aliasModels[alias] = v
+		}
 	}
 	if base := strings.ToLower(stripQualifier(r.model)); base != "" {
 		if envName, isAlias := c.K().AliasEnv(base); isAlias {
@@ -210,6 +219,11 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		default:
 			harness.ProbeGateway(c, b, ep, r.effModel)
 		}
+		var slots []harness.ModelSlot
+		for alias, m := range r.aliasModels {
+			slots = append(slots, harness.Slot(alias+" 别名", m))
+		}
+		harness.CheckOtherModels(c, b, ep, r.effModel, slots)
 	} else if !c.Live {
 		b.Warn("gateway", "网关探测", "OAuth 登录 / helper 脚本没法用 HTTP 探，只能真跑一次", "aivet check claude --live")
 	}

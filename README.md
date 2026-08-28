@@ -33,11 +33,11 @@ aivet v0.1.0  · macOS arm64
 
 | 工具 | 查什么 | 能自动修什么 |
 |---|---|---|
-| **Claude Code** | settings.json 语法、接入方式（OAuth / key / 网关）、`ANTHROPIC_BASE_URL` 是否误带 `/v1`、模型别名（`sonnet`/`opus`/`haiku`）走网关时有没有映射、shell 与文件里的环境变量打架、网关三连 | 跳过首次向导、去掉多余的 `/v1` |
-| **Codex CLI** | config.toml 语法、`model_provider` 与表名是否成对、`wire_api`（0.137+ 只认 responses）、key 来源（env_key / auth.json / ChatGPT 登录）、网关三连 | `wire_api` 改 responses |
-| **Hermes Agent** | config.yaml（新旧两代 schema）、提供方、key（env / ~/.hermes/.env / 明文）、模型是否已声明、网关三连 | — |
-| **pi agent** | settings.json + models.json、defaultModel 是否在提供方清单里、key、网关三连 | defaultModel 改成清单第一个 |
-| **DeepSeek Harness (dsh)** | settings.yaml + .credentials.yaml、每个 profile 的模型覆盖、插件是否装好、Node 是否在、网关三连 | 默认模型改成清单第一个 |
+| **Claude Code** | settings.json 语法、接入方式（OAuth / key / 网关）、`ANTHROPIC_BASE_URL` 是否误带 `/v1`、模型别名（`sonnet`/`opus`/`haiku`）走网关时有没有映射、shell 与文件里的环境变量打架、网关三连、**三个别名各自指到的模型在不在清单里** | 跳过首次向导、去掉多余的 `/v1` |
+| **Codex CLI** | config.toml 语法、`model_provider` 与表名是否成对、`wire_api`（0.137+ 只认 responses）、key 来源（env_key / auth.json / ChatGPT 登录）、网关三连、**`review_model`（`/review` 用的那个）在不在清单里** | `wire_api` 改 responses |
+| **Hermes Agent** | config.yaml（新旧两代 schema）、提供方、key（env / ~/.hermes/.env / 明文）、模型是否已声明、网关三连、**声明的那份模型菜单有没有网关给不出的** | — |
+| **pi agent** | settings.json + models.json、defaultModel 是否在提供方清单里、key、网关三连、**`enabledModels`（Ctrl+P 能切到的那几个）在不在清单里** | defaultModel 改成清单第一个 |
+| **DeepSeek Harness (dsh)** | settings.yaml + .credentials.yaml、每个 profile 的模型覆盖、插件是否装好、Node 是否在、网关三连、**声明的那份模型菜单有没有网关给不出的** | 默认模型改成清单第一个 |
 | **cc-switch** | 谁在管：原生官方登录 / 原生自管 / cc-switch 接管 / 记录过时；原生坏了时，cc-switch 里存的备选**先探再推荐** | — |
 
 每件工具还会先确认它**真的跑得起来**：npm 装的那几个（codex / pi / dsh）常出现 shim 在、平台专用包没装全，`--version` 直接报 ENOENT——这种「装了但是坏的」会排在最前面报出来，而不是让底下的配置项一路绿灯。
@@ -148,7 +148,7 @@ aivet 要读懂六件工具的配置，就得知道它们的配置文件在哪�
 ## 它不做什么
 
 - 不替你保管 key，不做切换器——那是 cc-switch 的活。aivet 对 cc-switch 的立场是：**原生配置优先，官方登录为正，cc-switch 是 fallback**。官方能用时 cc-switch 可以空着，也可以存一份备用不启用，aivet 不会催你迁；原生探不通了，才会把 cc-switch 里存的备选探一遍，通了再告诉你 `cc-switch use`。
-- 不猜模型的上下文长度：`setup` 写的是保守默认值（128k / 16k），需要的话自己改。
+- 不猜模型的上下文长度：`setup` 优先照抄网关清单里的 `context_length` / `max_completion_tokens`；网关给不出才退回保守默认值（128k / 16k），并且会明说是退回来的。
 - `--live` 之外不启动任何工具；默认体检只读文件 + 打网关，一两秒完事。
 
 ## 开发

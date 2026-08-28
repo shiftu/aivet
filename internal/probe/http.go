@@ -51,9 +51,39 @@ func ModelsURL(base string) string {
 	return base + "/v1/models"
 }
 
+// ModelInfo 是清单里的一条模型。
+//
+// 除了 id，不少网关还会给出上下文长度和最大输出 —— 有就用它，
+// 别再让 aivet 拿一个写死的保守值去猜（猜小了工具会白白截断长上下文）。
+// 网关没给就是 0，调用方自己决定退回什么默认值。
+type ModelInfo struct {
+	ID                  string `json:"id"`
+	ContextLength       int    `json:"context_length"`
+	MaxCompletionTokens int    `json:"max_completion_tokens"`
+}
+
+// ModelIDs 只取 id。
+func ModelIDs(ms []ModelInfo) []string {
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, m.ID)
+	}
+	return out
+}
+
+// FindModel 在清单里按 id 找一条；找不到返回 false。
+func FindModel(ms []ModelInfo, id string) (ModelInfo, bool) {
+	for _, m := range ms {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return ModelInfo{}, false
+}
+
 // ListModels 拉网关的模型清单（OpenAI 风格 {data:[{id}]}）。
 // Anthropic 官方也有 /v1/models，但要 x-api-key 头。
-func ListModels(ctx context.Context, ep Endpoint) ([]string, PingResult) {
+func ListModels(ctx context.Context, ep Endpoint) ([]ModelInfo, PingResult) {
 	start := time.Now()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ModelsURL(ep.BaseURL), nil)
 	setAuth(req, ep)
@@ -69,21 +99,15 @@ func ListModels(ctx context.Context, ep Endpoint) ([]string, PingResult) {
 		return nil, pr
 	}
 	var parsed struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+		Data []ModelInfo `json:"data"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Data) == 0 {
 		pr.Detail = "返回了 200 但不是模型清单（不像 OpenAI 兼容接口）"
 		return nil, pr
 	}
-	ids := make([]string, 0, len(parsed.Data))
-	for _, m := range parsed.Data {
-		ids = append(ids, m.ID)
-	}
 	pr.OK = true
-	pr.Detail = fmt.Sprintf("%d 个模型", len(ids))
-	return ids, pr
+	pr.Detail = fmt.Sprintf("%d 个模型", len(parsed.Data))
+	return parsed.Data, pr
 }
 
 // Ping 用指定协议发一条最小请求（max_tokens=1），验证 key + 模型 + 端点三者一起能通。

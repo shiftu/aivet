@@ -44,6 +44,7 @@ type provider struct {
 
 type config struct {
 	Model          string              `toml:"model"`
+	ReviewModel    string              `toml:"review_model"`
 	ModelProvider  string              `toml:"model_provider"`
 	ModelProviders map[string]provider `toml:"model_providers"`
 }
@@ -163,7 +164,12 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		if r.prov.WireAPI == "chat" {
 			proto = probe.ChatCompletions
 		}
-		harness.ProbeGateway(c, b, probe.Endpoint{BaseURL: r.prov.BaseURL, Key: r.key, Protocol: proto}, r.cfg.Model)
+		ep := probe.Endpoint{BaseURL: r.prov.BaseURL, Key: r.key, Protocol: proto}
+		harness.ProbeGateway(c, b, ep, r.cfg.Model)
+		// review_model 是 /review 真正会发出去的那个名字，跟 model 各走各的。
+		harness.CheckOtherModels(c, b, ep, r.cfg.Model, []harness.ModelSlot{
+			harness.Slot("review_model", r.cfg.ReviewModel),
+		})
 	}
 	harness.LiveRun(c, b, "Codex", d.Path, "exec", "--skip-git-repo-check", harness.LivePrompt)
 	return b.Checks()
