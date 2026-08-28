@@ -128,6 +128,11 @@ func resolve(c *harness.Context) resolved {
 	return r
 }
 
+// Posture 报「靠什么在跑」。Hermes 没有「官方登录」这回事，永远是某个提供方的地址。
+func (H) Posture(c *harness.Context) harness.Posture {
+	return harness.Posture{BaseURL: resolve(c).baseURL}
+}
+
 func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	b := harness.NewBuilder(h.ID())
 	r := resolve(c)

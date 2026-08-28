@@ -118,6 +118,12 @@ func resolve(c *harness.Context) resolved {
 	return r
 }
 
+// Posture 报「靠什么在跑」：没网关地址、又有登录态或 key，就是官方；两样都没有是没配置。
+func (H) Posture(c *harness.Context) harness.Posture {
+	r := resolve(c)
+	return harness.Posture{Official: r.baseURL == "" && (r.hasOAuth || r.key != ""), BaseURL: r.baseURL}
+}
+
 func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	b := harness.NewBuilder(h.ID())
 	r := resolve(c)

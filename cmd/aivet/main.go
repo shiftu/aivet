@@ -190,7 +190,7 @@ func selectTools(all []harness.Harness, names []string) ([]harness.Harness, erro
 	if len(names) == 0 {
 		return all, nil
 	}
-	var out []harness.Harness
+	want := map[string]bool{}
 	for _, n := range names {
 		n = strings.ToLower(n)
 		if n == "cc-switch" {
@@ -199,11 +199,19 @@ func selectTools(all []harness.Harness, names []string) ([]harness.Harness, erro
 		found := false
 		for _, h := range all {
 			if h.ID() == n {
-				out, found = append(out, h), true
+				found = true
 			}
 		}
 		if !found {
 			return nil, fmt.Errorf("不认识的工具 %q；可选：claude codex hermes pi dsh ccswitch", n)
+		}
+		want[n] = true
+	}
+	// 按注册顺序出，不按用户敲的顺序：切换器要对照别的工具的体检结论，必须排在它们后面。
+	var out []harness.Harness
+	for _, h := range all {
+		if want[h.ID()] {
+			out = append(out, h)
 		}
 	}
 	return out, nil
@@ -219,6 +227,8 @@ func runReport(ctx context.Context, hs []harness.Harness, live, offline bool, pr
 	if err := c.K().LoadErr; err != nil {
 		r.Notes = append(r.Notes, fmt.Sprintf("%s 读不了（%v）——这份报告用的是内置知识，你补的那些没生效", c.K().UserFile, err))
 	}
+	// 只查 cc-switch 时，它要对照的工具没跑过 —— 补一份只读配置的姿态，让它至少知道谁在管。
+	harness.Prime(c, registry(), hs)
 	for _, h := range hs {
 		r.Tools = append(r.Tools, harness.Run(c, h))
 	}

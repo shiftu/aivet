@@ -38,7 +38,7 @@ aivet v0.1.0  · macOS arm64
 | **Hermes Agent** | config.yaml（新旧两代 schema）、提供方、key（env / ~/.hermes/.env / 明文）、模型是否已声明、网关三连 | — |
 | **pi agent** | settings.json + models.json、defaultModel 是否在提供方清单里、key、网关三连 | defaultModel 改成清单第一个 |
 | **DeepSeek Harness (dsh)** | settings.yaml + .credentials.yaml、每个 profile 的模型覆盖、插件是否装好、Node 是否在、网关三连 | 默认模型改成清单第一个 |
-| **cc-switch** | 它认为当前生效的 provider 和原生文件里的是否一致（漂移检测） | — |
+| **cc-switch** | 谁在管：原生官方登录 / 原生自管 / cc-switch 接管 / 记录过时；原生坏了时，cc-switch 里存的备选**先探再推荐** | — |
 
 每件工具还会先确认它**真的跑得起来**：npm 装的那几个（codex / pi / dsh）常出现 shim 在、平台专用包没装全，`--version` 直接报 ENOENT——这种「装了但是坏的」会排在最前面报出来，而不是让底下的配置项一路绿灯。
 
@@ -147,7 +147,7 @@ aivet 要读懂六件工具的配置，就得知道它们的配置文件在哪�
 
 ## 它不做什么
 
-- 不替你保管 key，不做切换器——那是 cc-switch 的活；aivet 只检查 cc-switch 有没有和原生文件漂移。
+- 不替你保管 key，不做切换器——那是 cc-switch 的活。aivet 对 cc-switch 的立场是：**原生配置优先，官方登录为正，cc-switch 是 fallback**。官方能用时 cc-switch 可以空着，也可以存一份备用不启用，aivet 不会催你迁；原生探不通了，才会把 cc-switch 里存的备选探一遍，通了再告诉你 `cc-switch use`。
 - 不猜模型的上下文长度：`setup` 写的是保守默认值（128k / 16k），需要的话自己改。
 - `--live` 之外不启动任何工具；默认体检只读文件 + 打网关，一两秒完事。
 

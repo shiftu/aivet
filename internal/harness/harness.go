@@ -26,6 +26,8 @@ type Context struct {
 	// Knowledge 是那些会过时的外部事实（提供方地址、配置文件位置、版本断言）。
 	// 留空则首次用到时按 Home 现加载 —— 测试可以直接塞一份假的进来。
 	Knowledge *knowledge.K
+	// Postures 是这次跑过（或 Prime 补过）的工具的姿态，按工具 ID 存；cc-switch 拿来对照。
+	Postures map[string]Posture
 }
 
 // K 返回生效的知识，必要时现加载。
@@ -107,6 +109,9 @@ func Run(c *Context, h Harness) report.Tool {
 	t := report.Tool{ID: h.ID(), Label: h.Label(), Installed: d.Installed, Path: d.Path, Version: d.Version}
 	if !d.Installed {
 		t.Checks = []report.Check{{ID: h.ID() + ".installed", Tool: h.ID(), Title: "安装", Status: report.Skip, Detail: "没找到可执行文件，跳过"}}
+		if _, ok := h.(PostureReporter); ok {
+			c.SetPosture(h.ID(), Posture{})
+		}
 		return t
 	}
 	var pre []report.Check
@@ -121,6 +126,14 @@ func Run(c *Context, h Harness) report.Tool {
 		defer func() { c.Live = live }()
 	}
 	t.Checks = append(pre, h.Check(c, d)...)
+	// 体检完顺手记姿态：配置由工具自己判断，Healthy 用这次的结论 —— 有一条 Fail 就不算能跑。
+	if pr, ok := h.(PostureReporter); ok {
+		p := pr.Posture(c)
+		p.Installed = true
+		healthy := t.Worst() != report.Fail
+		p.Healthy = &healthy
+		c.SetPosture(h.ID(), p)
+	}
 	return t
 }
 

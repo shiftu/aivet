@@ -12,6 +12,7 @@ package codex
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/shiftu/aivet/internal/harness"
 	"github.com/shiftu/aivet/internal/probe"
@@ -95,6 +96,18 @@ func resolve(c *harness.Context) resolved {
 	}
 	return r
 }
+
+// Posture 报「靠什么在跑」：provider 指向 OpenAI 官方端点、且有 ChatGPT 登录或 key，就是官方；
+// 指向官方却两样都没有，是没配置。
+func (H) Posture(c *harness.Context) harness.Posture {
+	r := resolve(c)
+	if isOfficialBase(r.prov.BaseURL) {
+		return harness.Posture{Official: r.chatgpt || r.key != ""}
+	}
+	return harness.Posture{BaseURL: r.prov.BaseURL}
+}
+
+func isOfficialBase(u string) bool { return u == "" || strings.Contains(u, "api.openai.com") }
 
 func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	b := harness.NewBuilder(h.ID())
