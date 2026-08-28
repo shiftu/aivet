@@ -12,7 +12,7 @@ import (
 // mainCommands 是 cmd/aivet 的 switch 里真实分发的命令。
 // 说明书和实现对不上是最烦人的一类 bug：帮助里写着的命令跑不了，
 // 或者能跑的命令帮助里查不到。这里把两边钉死。
-var mainCommands = []string{"check", "fix", "setup", "ask", "skill", "env", "knowledge", "help", "version"}
+var mainCommands = []string{"check", "fix", "setup", "ask", "skill", "env", "knowledge", "help", "completion", "version"}
 
 func TestEveryDispatchedCommandIsDocumented(t *testing.T) {
 	cmds := Commands(nil)

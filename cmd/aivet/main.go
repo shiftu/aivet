@@ -63,7 +63,8 @@ func main() {
 		cmd, args = "version", args[1:]
 	}
 	// 任何子命令加 --help 都走帮助，而不是让 flag 包打印它那套。
-	if cmd != "help" && hasHelpFlag(args) {
+	// __complete 除外 —— 用户敲到一半的 --help 是要补的词，不是求助。
+	if cmd != "help" && cmd != "__complete" && hasHelpFlag(args) {
 		code := runHelp([]string{cmd})
 		os.Exit(code)
 	}
@@ -85,6 +86,10 @@ func main() {
 		code = runKnowledge(args)
 	case "version":
 		fmt.Printf("aivet %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+	case "completion":
+		code = runCompletion(args)
+	case "__complete":
+		code = runShellComplete(args)
 	case "help":
 		code = runHelp(args)
 	default:
@@ -554,6 +559,93 @@ func initKnowledge(k *knowledge.K) int {
 	return 0
 }
 
+// runCompletion 装 shell 补全。不带 shell 名时认一下当前 shell，把安装命令直接给出来 ——
+// 「你得先知道自己在用哪个 shell、再知道文件该放哪」是这类功能最劝退的一步，
+// 而这两件事 aivet 都能替用户答上。
+func runCompletion(args []string) int {
+	var want string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") && want == "" {
+			want = strings.ToLower(a)
+		}
+	}
+	if want != "" {
+		script, ok := cli.Script(want)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "不认识的 shell %q；可选：%s\n", want, strings.Join(cli.Shells, " "))
+			return 2
+		}
+		fmt.Print(script)
+		return 0
+	}
+	pr := newPrinter(false)
+	sh := detectShell()
+	pr.Banner(version, platform.Label(), false)
+	pr.Section("shell 补全")
+	if sh == "" {
+		pr.Line("warn", "认不出你在用哪个 shell（$SHELL 是空的）。挑一个：")
+		for _, s := range cli.Shells {
+			pr.Line("info", "aivet completion "+s)
+		}
+		return 0
+	}
+	pr.Line("ok", "看起来你在用 "+sh+"。照抄下面这行：")
+	fmt.Fprintln(pr.W)
+	for i, line := range cli.InstallHint(sh) {
+		if i == 0 {
+			fmt.Fprintln(pr.W, "    "+line)
+			continue
+		}
+		fmt.Fprintln(pr.W, "    "+pr.P.Dim(line))
+	}
+	fmt.Fprintln(pr.W, pr.P.Dim("\n  装一次就够了：命令、选项、工具名、能修的项都是每次按 Tab 现问 aivet 要的。\n"))
+	return 0
+}
+
+// detectShell 从 $SHELL 认 shell；认不出就返回空串，由调用方给出选项。
+func detectShell() string {
+	base := os.Getenv("SHELL")
+	if i := strings.LastIndexByte(base, '/'); i >= 0 {
+		base = base[i+1:]
+	}
+	for _, s := range cli.Shells {
+		if base == s {
+			return s
+		}
+	}
+	if base == "pwsh" {
+		return "powershell"
+	}
+	return ""
+}
+
+// runShellComplete 是给补全脚本调的暗门（不出现在帮助里）：一行一个候选，
+// 格式是 值 \t 说明。显示不了说明的 shell 自己切掉后半段。
+//
+// 约定：正在敲的那个词走 --cur=（空串也是它，写成 --cur= 就丢不掉），
+// 其余参数是已经敲完的词。Complete() 要的是「最后一个是当前词」，在这儿拼好。
+func runShellComplete(args []string) int {
+	const curFlag = "--cur="
+	cur := ""
+	var done []string
+	for _, a := range args {
+		if strings.HasPrefix(a, curFlag) {
+			cur = strings.TrimPrefix(a, curFlag)
+			continue
+		}
+		done = append(done, a)
+	}
+	for _, c := range cli.Complete(commands(), append(done, cur)) {
+		fmt.Printf("%s\t%s\n", c.Name, oneLine(c.Desc))
+	}
+	return 0
+}
+
+// oneLine 把说明压成一行 —— 制表符和换行会把补全的输出格式冲散。
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
 func runEnv(ctx context.Context) int {
 	pr := newPrinter(false)
 	pr.Banner(version, platform.Label(), false)
@@ -586,13 +678,14 @@ func runEnv(ctx context.Context) int {
 
 // reorder 把 flag 挪到位置参数前面，让 `aivet check codex --live` 和 `aivet check --live codex` 都行。
 func reorder(args []string) []string {
+	cmds := commands()
 	var flags, pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if strings.HasPrefix(a, "-") {
 			flags = append(flags, a)
 			// 带值的 flag（--gateway URL）把下一个也带上
-			if !strings.Contains(a, "=") && i+1 < len(args) && needsValue(a) {
+			if !strings.Contains(a, "=") && i+1 < len(args) && cli.TakesValue(cmds, a) {
 				flags = append(flags, args[i+1])
 				i++
 			}
@@ -601,14 +694,6 @@ func reorder(args []string) []string {
 		pos = append(pos, a)
 	}
 	return append(flags, pos...)
-}
-
-func needsValue(flagName string) bool {
-	switch strings.TrimLeft(flagName, "-") {
-	case "gateway", "key", "model", "tools", "with", "for":
-		return true
-	}
-	return false
 }
 
 func uniq(in []string) []string {

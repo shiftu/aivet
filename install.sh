@@ -37,3 +37,4 @@ esac
 echo
 "$dir/aivet" version
 echo "下一步：aivet        （体检）   aivet setup （新手向导）"
+echo "顺手装个 Tab 补全：aivet completion"

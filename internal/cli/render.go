@@ -34,6 +34,14 @@ func (r Renderer) Overview(cmds []Command) {
 		r.P.Dim("v"+strings.TrimPrefix(r.Version, "v")), r.P.Dim("— "+Tagline))
 	fmt.Fprintf(r.W, "\n  %s  %s\n", r.P.Dim("用法"), "aivet <命令> [参数…] [选项]")
 
+	// 名字这一列跟着最长的命令走，别写死 —— 加一条名字长点的命令就会把整列挤歪。
+	w := 9
+	for _, c := range cmds {
+		if len(c.Name) > w {
+			w = len(c.Name)
+		}
+	}
+
 	for _, g := range Groups {
 		var in []Command
 		for _, c := range cmds {
@@ -46,13 +54,13 @@ func (r Renderer) Overview(cmds []Command) {
 		}
 		r.title(g)
 		for _, c := range in {
-			fmt.Fprintf(r.W, "    %s  %s\n", r.P.Cyan(ui.Pad(c.Name, 9)), c.Summary)
+			fmt.Fprintf(r.W, "    %s  %s\n", r.P.Cyan(ui.Pad(c.Name, w)), c.Summary)
 		}
 	}
 
 	r.title("退出码")
 	for _, k := range []string{"0", "1", "2"} {
-		fmt.Fprintf(r.W, "    %s  %s\n", r.P.Dim(ui.Pad(k, 9)), ExitCodes[k])
+		fmt.Fprintf(r.W, "    %s  %s\n", r.P.Dim(ui.Pad(k, w)), ExitCodes[k])
 	}
 
 	fmt.Fprintln(r.W)

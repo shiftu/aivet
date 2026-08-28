@@ -5,12 +5,32 @@
 // 就能单独测（选项有没有漏写、例子里的命令存不存在），也不会随手改坏。
 package cli
 
+import "strings"
+
+// Value 是一个候选取值：名字 + 一行说明。补全靠它，`help --json` 也顺带把它交给 agent，
+// 省得 agent 从 Args 那句自由文本里猜「工具」到底能填哪几个。
+type Value struct {
+	Name string `json:"name"`
+	Desc string `json:"desc,omitempty"`
+}
+
+// vals 把一串名字包成没有说明的候选。
+func vals(names ...string) []Value {
+	out := make([]Value, 0, len(names))
+	for _, n := range names {
+		out = append(out, Value{Name: n})
+	}
+	return out
+}
+
 // Flag 是一个命令行选项。
 type Flag struct {
-	Name string `json:"flag"`          // 不带前缀的名字，如 json
-	Arg  string `json:"arg,omitempty"` // 需要取值时的占位名，如 URL；布尔选项留空
-	Desc string `json:"desc"`
-	Env  string `json:"env,omitempty"` // 等价的环境变量
+	Name   string  `json:"flag"`          // 不带前缀的名字，如 json
+	Arg    string  `json:"arg,omitempty"` // 需要取值时的占位名，如 URL；布尔选项留空
+	Desc   string  `json:"desc"`
+	Env    string  `json:"env,omitempty"`    // 等价的环境变量
+	Values []Value `json:"values,omitempty"` // 取值的候选（补全用）；自由取值的（URL、key）留空
+	List   bool    `json:"list,omitempty"`   // 取值是逗号分隔的多项
 }
 
 // Example 是一条带说明的示例命令。
@@ -27,10 +47,15 @@ type Command struct {
 	Summary  string    `json:"summary"` // 一行，总览里显示
 	Usage    string    `json:"usage"`
 	Long     string    `json:"long,omitempty"` // 详情页的段落说明
-	Args     string    `json:"args,omitempty"` // 位置参数说明
+	Args     string    `json:"args,omitempty"` // 位置参数说明（给人看的一句话）
 	Flags    []Flag    `json:"flags,omitempty"`
 	Examples []Example `json:"examples,omitempty"`
 	Notes    []string  `json:"notes,omitempty"`
+
+	// Positional 是位置参数的候选，Repeat 说明能给几个。这两个只有补全在用 ——
+	// Args 那句话是写给人的，机器解析不了。
+	Positional []Value `json:"positional,omitempty"`
+	Repeat     bool    `json:"repeat,omitempty"`
 }
 
 // Groups 是总览里的分组顺序。
@@ -38,6 +63,17 @@ var Groups = []string{"体检", "修复", "交给 agent", "其他"}
 
 // Tools 是所有可被检查的工具 id。
 var Tools = []string{"claude", "codex", "hermes", "pi", "dsh", "ccswitch"}
+
+// 下面三份名单是 Tools 的子集，各自对应一种能力。它们决定 --with / --tools / --for
+// 补出来的是什么，所以不能凭印象写 —— cmd/aivet 有测试拿真实的注册表和 skill.Targets 对着钉。
+var (
+	// Agents 是能被 aivet ask 拉起来接手的（实现了 harness.Launcher）。
+	Agents = []string{"claude", "codex", "hermes", "pi", "dsh"}
+	// Configurable 是 setup 向导能写配置的（实现了 harness.Configurer）。
+	Configurable = []string{"claude", "codex", "hermes", "pi", "dsh"}
+	// SkillTools 是能装 aivet 技能的（skill.Targets 的键）。
+	SkillTools = []string{"claude", "codex", "hermes", "pi"}
+)
 
 // ExitCodes 说明退出码含义。
 var ExitCodes = map[string]string{
@@ -56,7 +92,7 @@ func Commands(fixIDs []string) []Command {
 	if len(fixIDs) > 0 {
 		fixNote = "这个版本能自动修的：" + join(fixIDs, "、")
 	}
-	return []Command{
+	cmds := []Command{
 		{
 			Name: "check", Aliases: []string{"doctor"}, Group: "体检",
 			Summary: "体检所有已安装的工具（默认命令，可省略）",
@@ -70,6 +106,7 @@ func Commands(fixIDs []string) []Command {
 				{Name: "live", Desc: "真的把每件工具启动一次，看它能不能回话（每件 10–60 秒）"},
 				{Name: "offline", Desc: "一个网络请求都不发，只看配置文件"},
 			},
+			Positional: vals(Tools...), Repeat: true,
 			Examples: []Example{
 				{"aivet", "体检全部已安装的工具"},
 				{"aivet check codex", "只查 codex"},
@@ -95,6 +132,7 @@ func Commands(fixIDs []string) []Command {
 				{Name: "yes", Desc: "不逐条问，全部执行"},
 				{Name: "dry-run", Desc: "只说要改哪些文件，不真的写"},
 			},
+			Positional: vals(fixIDs...), Repeat: true,
 			Examples: []Example{
 				{"aivet fix --dry-run", "先看看它打算动什么"},
 				{"aivet fix", "逐条确认着修"},
@@ -114,7 +152,7 @@ func Commands(fixIDs []string) []Command {
 				{Name: "gateway", Arg: "URL", Desc: "网关地址，如 https://api.deepseek.com/v1（不填则交互式询问）"},
 				{Name: "key", Arg: "KEY", Desc: "API key（不填则交互式询问，输入不回显）", Env: "AIVET_KEY"},
 				{Name: "model", Arg: "名字", Desc: "模型名（不填则从网关清单里挑）"},
-				{Name: "tools", Arg: "列表", Desc: "只配这几件，逗号分隔，如 claude,codex"},
+				{Name: "tools", Arg: "列表", Desc: "只配这几件，逗号分隔，如 claude,codex", Values: vals(Configurable...), List: true},
 				{Name: "force", Desc: "覆盖已有配置（默认只补缺）"},
 				{Name: "yes", Desc: "非交互：缺什么就报错，不提问"},
 			},
@@ -134,7 +172,7 @@ func Commands(fixIDs []string) []Command {
 				"挑一个体检通过的 agent 前台拉起来，接下来你和它对话。\n\n" +
 				"一个健康的都没有时，提示词会直接打在屏幕上 —— 你手边可能有网页版可以粘。",
 			Flags: []Flag{
-				{Name: "with", Arg: "工具", Desc: "指定谁来接手：claude / codex / hermes / pi / dsh"},
+				{Name: "with", Arg: "工具", Desc: "指定谁来接手：claude / codex / hermes / pi / dsh", Values: vals(Agents...)},
 				{Name: "print", Desc: "只打印提示词，不启动任何东西"},
 			},
 			Examples: []Example{
@@ -153,7 +191,11 @@ func Commands(fixIDs []string) []Command {
 				"怎么读 --json 的结果、什么时候可以直接 aivet fix --yes。\n" +
 				"装完之后在 agent 里说一句「用 aivet 检查一下我的 AI 环境」就行。",
 			Flags: []Flag{
-				{Name: "for", Arg: "列表", Desc: "装给谁，逗号分隔（默认：所有已安装的 claude,codex,hermes,pi）"},
+				{Name: "for", Arg: "列表", Desc: "装给谁，逗号分隔（默认：所有已安装的 claude,codex,hermes,pi）", Values: vals(SkillTools...), List: true},
+			},
+			Positional: []Value{
+				{"install", "写入技能文件（默认）"},
+				{"show", "把技能内容打到屏幕上"},
 			},
 			Examples: []Example{
 				{"aivet skill install", "装给所有已安装的 agent"},
@@ -209,11 +251,55 @@ func Commands(fixIDs []string) []Command {
 			},
 		},
 		{
+			Name: "completion", Group: "其他",
+			Summary: "装 shell 补全：命令、选项、工具名都能按 Tab 补出来",
+			Usage:   "aivet completion [bash|zsh|fish|powershell]",
+			Args:    "shell：" + join(Shells, "  ") + "（不填 = 认一下你在用哪个，然后告诉你怎么装）",
+			Long: "不带参数时，它认出你的 shell 并把安装命令直接给你，照抄一行就行。\n" +
+				"带 shell 名时，把补全脚本打到标准输出，你自己决定重定向到哪。\n\n" +
+				"脚本本身只有十行 —— 每按一次 Tab，它回头问 aivet 要候选。所以装一次就够了：\n" +
+				"以后 aivet 升级、多了命令、多了可自动修复的项，补全跟着变，不用重装。",
+			Positional: vals(Shells...),
+			Examples: []Example{
+				{"aivet completion", "认一下 shell，给出照抄就能用的安装命令"},
+				{"aivet completion zsh > ~/.zsh/completions/_aivet", "装给 zsh"},
+				{"aivet completion bash", "把 bash 脚本打到屏幕上"},
+			},
+			Notes: []string{"补出来的工具名、修复项 id 都是这台机器上此刻真实可用的，不是写死的清单。"},
+		},
+		{
 			Name: "version", Group: "其他",
 			Summary: "打印版本号",
 			Usage:   "aivet version",
 		},
 	}
+	// `aivet help <命令>` 能填什么，就是上面这些 —— 与其再抄一份，不如现摘。
+	for i := range cmds {
+		if cmds[i].Name != "help" {
+			continue
+		}
+		for _, c := range cmds {
+			cmds[i].Positional = append(cmds[i].Positional, Value{Name: c.Name, Desc: c.Summary})
+		}
+	}
+	return cmds
+}
+
+// TakesValue 说一个选项名后面是不是还要跟一个值。
+// 参数解析（把选项挪到位置参数前面）和补全都要问这件事，问的是同一份说明书。
+func TakesValue(cmds []Command, flagName string) bool {
+	name := strings.TrimLeft(flagName, "-")
+	if i := strings.IndexByte(name, '='); i >= 0 {
+		name = name[:i]
+	}
+	for _, c := range cmds {
+		for _, f := range c.Flags {
+			if f.Name == name && f.Arg != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Lookup 按名字或别名找命令。

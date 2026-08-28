@@ -20,3 +20,4 @@ if ($userPath -notlike "*$dir*") {
 }
 & (Join-Path $dir "aivet.exe") version
 Write-Host "下一步：aivet        （体检）   aivet setup （新手向导）"
+Write-Host "顺手装个 Tab 补全：aivet completion"
