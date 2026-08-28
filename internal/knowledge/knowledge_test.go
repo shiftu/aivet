@@ -3,6 +3,7 @@ package knowledge
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -128,5 +129,32 @@ func TestTemplateIsValidAndReloadable(t *testing.T) {
 	write(t, home, string(b))
 	if k := Load(home); k.LoadErr != nil {
 		t.Fatalf("--init 生成的模板自己都读不回来：%v", k.LoadErr)
+	}
+}
+
+// OminiGate 一个域名两套协议，两条记录的 /v1 后缀必须相反：
+// OpenAI 那套在 /v1，Anthropic 那套在根路径（Claude Code 自己补 /v1/messages，
+// 给它带 /v1 的地址会 404 —— aivet 自己就有一条检查专门骂这件事）。
+// 写反了不会报错，只会让所有 ominigate 用户探测失败，所以钉死。
+func TestOminiGateProtocolsHaveOppositeV1Suffix(t *testing.T) {
+	b := Builtin()
+	chat, ok := b.Providers["ominigate"]
+	if !ok {
+		t.Fatal("内置里没有 ominigate")
+	}
+	if chat.Protocol != "chat" || !strings.HasSuffix(chat.BaseURL, "/v1") {
+		t.Fatalf("OpenAI 那条要 chat 且以 /v1 结尾：%+v", chat)
+	}
+	ant, ok := b.Providers["ominigate-anthropic"]
+	if !ok {
+		t.Fatal("内置里没有 ominigate-anthropic")
+	}
+	if ant.Protocol != "anthropic" || strings.HasSuffix(ant.BaseURL, "/v1") {
+		t.Fatalf("Anthropic 那条要 anthropic 且不带 /v1：%+v", ant)
+	}
+	for name, p := range map[string]Provider{"ominigate": chat, "ominigate-anthropic": ant} {
+		if len(p.EnvKeys) == 0 || p.EnvKeys[0] != "OMINIGATE_API_KEY" {
+			t.Fatalf("%s 的第一个 key 名要是 OMINIGATE_API_KEY：%+v", name, p.EnvKeys)
+		}
 	}
 }

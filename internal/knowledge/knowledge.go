@@ -71,6 +71,13 @@ func Builtin() File {
 			"moonshot":          {[]string{"MOONSHOT_API_KEY"}, "https://api.moonshot.cn/v1", "chat"},
 			"qwen":              {[]string{"DASHSCOPE_API_KEY"}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "chat"},
 			"dashscope":         {[]string{"DASHSCOPE_API_KEY"}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "chat"},
+			// OminiGate 一个域名两套协议，路径还不一样，所以拆成两条：
+			// OpenAI 风格在 /v1（chat + models 清单），Anthropic 风格在根路径
+			// （Claude Code 自己会补 /v1/messages —— 给它带 /v1 的地址反而会 404）。
+			// 2026-08-28 实测：/v1/models 与 /v1/chat/completions 都是 401（在，要 key），
+			// /v1/messages 也是 401；但 /v1/responses 是 404 —— 它没有 Responses API。
+			"ominigate":           {[]string{"OMINIGATE_API_KEY", "OPENAI_API_KEY"}, "https://api.ominigate.ai/v1", "chat"},
+			"ominigate-anthropic": {[]string{"OMINIGATE_API_KEY", "ANTHROPIC_AUTH_TOKEN"}, "https://api.ominigate.ai", "anthropic"},
 		},
 		// Claude Code 的别名不是模型名：`model: "sonnet"` 会被它解析成内置的某个
 		// claude-sonnet-… id 再发出去，配置里看不到。这张表记的是「把别名重定向
