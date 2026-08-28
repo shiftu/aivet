@@ -11,6 +11,22 @@ func TestDisplayWidthCountsCJKAsTwo(t *testing.T) {
 	}
 }
 
+// 全角标点也要算两列——漏掉 ？ 会让整栏歪掉。
+func TestDisplayWidthCoversFullwidthPunctuation(t *testing.T) {
+	cases := map[string]int{
+		"第一次用？":     10,
+		"你是 agent？": 12,
+		"想看某个命令":    12,
+		"、。「」（）？！":  16,
+		"ascii":     5,
+	}
+	for in, want := range cases {
+		if got := displayWidth(in); got != want {
+			t.Errorf("displayWidth(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
 func TestPadDisplay(t *testing.T) {
 	got := padDisplay("中文", 6)
 	if got != "中文  " {

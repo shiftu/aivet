@@ -1,12 +1,12 @@
 // aivet：给套着缰绳的 AI 看病。
 //
-//	aivet                 体检所有已安装的工具
-//	aivet check [tool…]   同上，可指定工具；--json 给 agent；--live 真跑一次
-//	aivet fix [id…]       自动修复（改前备份）；--yes 全修；--dry-run 只看
-//	aivet setup           新手向导：一处来源 → 所有工具
-//	aivet ask             把报告交给一个健康的 agent 去修剩下的
-//	aivet skill install   把 aivet 装成各 agent 的技能
-//	aivet env             系统 / 安装建议
+// 命令的权威说明在 internal/cli（一处来源：人看的帮助、agent 看的 JSON、
+// 还有下面的参数解析都对着它）。加命令时那边和这里的 switch 要一起改，
+// 有测试盯着两边不许对不上。
+//
+//	aivet help        命令总览
+//	aivet help <命令>  详细用法
+//	aivet help --json  给 agent 的完整规格
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"runtime"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/shiftu/aivet/internal/agent"
+	"github.com/shiftu/aivet/internal/cli"
 	"github.com/shiftu/aivet/internal/harness"
 	"github.com/shiftu/aivet/internal/harness/ccswitch"
 	"github.com/shiftu/aivet/internal/harness/claude"
@@ -49,8 +51,19 @@ func main() {
 	defer stop()
 	args := os.Args[1:]
 	cmd := "check"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	switch {
+	case len(args) > 0 && !strings.HasPrefix(args[0], "-"):
 		cmd, args = args[0], args[1:]
+	case len(args) > 0 && isHelpFlag(args[0]):
+		// `aivet --help` 以前会掉进 check 的 flag 解析，吐一坨 Go 默认的选项表。
+		cmd, args = "help", args[1:]
+	case len(args) > 0 && (args[0] == "-v" || args[0] == "--version"):
+		cmd, args = "version", args[1:]
+	}
+	// 任何子命令加 --help 都走帮助，而不是让 flag 包打印它那套。
+	if cmd != "help" && hasHelpFlag(args) {
+		code := runHelp([]string{cmd})
+		os.Exit(code)
 	}
 	var code int
 	switch cmd {
@@ -66,34 +79,100 @@ func main() {
 		code = runSkill(args)
 	case "env":
 		code = runEnv(ctx)
-	case "version", "--version", "-v":
+	case "version":
 		fmt.Printf("aivet %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
-	case "help", "--help", "-h":
-		usage()
+	case "help":
+		code = runHelp(args)
 	default:
-		fmt.Fprintf(os.Stderr, "不认识的命令 %q\n\n", cmd)
-		usage()
+		fmt.Fprintf(os.Stderr, "不认识的命令 %q。", cmd)
+		if s := cli.Suggest(commands(), cmd); s != "" {
+			fmt.Fprintf(os.Stderr, "你是想写 %s 吗？\n", s)
+		} else {
+			fmt.Fprintf(os.Stderr, "看看有哪些命令：aivet help\n")
+		}
 		code = 2
 	}
 	os.Exit(code)
 }
 
-func usage() {
-	fmt.Print(`aivet ` + version + ` — 给套着缰绳的 AI 看病
+// isHelpFlag 判断一个参数是不是求助。
+func isHelpFlag(a string) bool { return a == "-h" || a == "--help" || a == "-help" }
 
-用法：
-  aivet [check] [tool…] [--json] [--live] [--offline]   体检（默认全部已安装工具）
-  aivet fix [fix-id…] [--yes] [--dry-run]               自动修复，改前备份
-  aivet setup [--gateway URL --key KEY --model M]       新手向导：一处来源写全所有工具
-        [--tools claude,codex,…] [--force] [--yes]
-  aivet ask [--with claude|codex|hermes|pi|dsh]         把报告交给一个健康的 agent 接手
-  aivet skill install [--for claude,codex,hermes,pi]    把 aivet 装成 agent 技能
-  aivet env                                             系统信息 + 安装命令
-  aivet version
+// hasHelpFlag 判断参数里有没有求助标志。
+func hasHelpFlag(args []string) bool {
+	for _, a := range args {
+		if isHelpFlag(a) {
+			return true
+		}
+	}
+	return false
+}
 
-工具名：claude  codex  hermes  pi  dsh  ccswitch
-退出码：0 没有故障；1 有故障；2 用法错误
-`)
+// commands 是命令说明书；fix 那一页要列出当前真实可用的修复项，
+// 所以从各工具的 Fixers() 现拿，不写死。
+func commands() []cli.Command {
+	var ids []string
+	for _, h := range registry() {
+		for _, f := range h.Fixers() {
+			ids = append(ids, f.ID)
+		}
+	}
+	return cli.Commands(ids)
+}
+
+func runHelp(args []string) int {
+	asJSON := false
+	var want string
+	for _, a := range args {
+		switch {
+		case a == "--json" || a == "-json":
+			asJSON = true
+		case isHelpFlag(a):
+		case !strings.HasPrefix(a, "-") && want == "":
+			want = a
+		}
+	}
+	cmds := commands()
+	r := cli.Renderer{W: os.Stdout, P: ui.New(), Wid: ui.Width(), Version: version}
+	if asJSON {
+		r.P = ui.Plain()
+		if err := r.JSON(cmds); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	if want == "" {
+		r.Overview(cmds)
+		return 0
+	}
+	c, ok := cli.Lookup(cmds, want)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "没有 %q 这个命令。", want)
+		if s := cli.Suggest(cmds, want); s != "" {
+			fmt.Fprintf(os.Stderr, "你是想看 %s 吗？\n", s)
+		} else {
+			fmt.Fprintln(os.Stderr, "看看有哪些命令：aivet help")
+		}
+		return 2
+	}
+	r.Detail(c)
+	return 0
+}
+
+// newFlagSet 让解析失败时提示 aivet help <命令>，而不是甩一坨 Go 默认的选项表 ——
+// 那套输出不解释任何东西，还会把命令名印成 "Usage of check:"。
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	return fs
+}
+
+// parseErr 把解析失败统一成一句人话 + 一条出路。
+func parseErr(name string, err error) int {
+	fmt.Fprintf(os.Stderr, "aivet %s: %v\n用法看这里：aivet help %s\n", name, err, name)
+	return 2
 }
 
 func newPrinter(json bool) ui.Printer {
@@ -138,12 +217,12 @@ func runReport(ctx context.Context, hs []harness.Harness, live, offline bool, pr
 }
 
 func runCheck(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	fs := newFlagSet("check")
 	asJSON := fs.Bool("json", false, "输出 JSON（给 agent / 脚本）")
 	live := fs.Bool("live", false, "真的把每件工具跑一次（慢）")
 	offline := fs.Bool("offline", false, "不打网络")
 	if err := fs.Parse(reorder(args)); err != nil {
-		return 2
+		return parseErr("check", err)
 	}
 	hs, err := selectTools(registry(), fs.Args())
 	if err != nil {
@@ -172,11 +251,11 @@ func runCheck(ctx context.Context, args []string) int {
 }
 
 func runFix(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
+	fs := newFlagSet("fix")
 	yes := fs.Bool("yes", false, "不逐条确认")
 	dry := fs.Bool("dry-run", false, "只说要改什么，不写")
 	if err := fs.Parse(reorder(args)); err != nil {
-		return 2
+		return parseErr("fix", err)
 	}
 	pr := newPrinter(false)
 	all := registry()
@@ -241,7 +320,7 @@ func confirm(pr ui.Printer, what string) bool {
 }
 
 func runSetup(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+	fs := newFlagSet("setup")
 	var o setup.Options
 	var tools string
 	fs.StringVar(&o.BaseURL, "gateway", "", "网关地址")
@@ -251,7 +330,7 @@ func runSetup(ctx context.Context, args []string) int {
 	fs.BoolVar(&o.Force, "force", false, "覆盖已有配置")
 	fs.BoolVar(&o.Yes, "yes", false, "非交互")
 	if err := fs.Parse(reorder(args)); err != nil {
-		return 2
+		return parseErr("setup", err)
 	}
 	if tools != "" {
 		o.Tools = strings.Split(tools, ",")
@@ -268,11 +347,11 @@ func runSetup(ctx context.Context, args []string) int {
 }
 
 func runAsk(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("ask", flag.ContinueOnError)
+	fs := newFlagSet("ask")
 	with := fs.String("with", "", "指定接手的 agent")
 	printOnly := fs.Bool("print", false, "只打印提示词，不启动")
 	if err := fs.Parse(reorder(args)); err != nil {
-		return 2
+		return parseErr("ask", err)
 	}
 	pr := newPrinter(false)
 	pr.Banner(version, platform.Label(), false)
@@ -315,10 +394,10 @@ func runAsk(ctx context.Context, args []string) int {
 }
 
 func runSkill(args []string) int {
-	fs := flag.NewFlagSet("skill", flag.ContinueOnError)
+	fs := newFlagSet("skill")
 	forTools := fs.String("for", "", "装给哪些 agent，逗号分隔（默认：已安装的）")
 	if err := fs.Parse(reorder(args)); err != nil {
-		return 2
+		return parseErr("skill", err)
 	}
 	pr := newPrinter(false)
 	sub := "install"

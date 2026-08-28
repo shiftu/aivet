@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode"
 
 	"github.com/shiftu/aivet/internal/report"
 )
@@ -103,6 +102,15 @@ func (pr Printer) Section(text string) {
 	fmt.Fprintf(pr.W, "\n%s\n", pr.P.Bold(text))
 }
 
+// Pad 按显示宽度右侧补空格（中文按 2 列算）。
+func Pad(s string, width int) string { return padDisplay(s, width) }
+
+// DisplayWidth 返回字符串在终端里占几列（中文按 2 列算）。
+func DisplayWidth(s string) int { return displayWidth(s) }
+
+// Wrap 把长文本按显示宽度折行，续行缩进 indent 列。
+func Wrap(s string, width, indent int) string { return wrap(s, width, indent) }
+
 // padDisplay 按显示宽度补齐（中文按 2 列算）。
 func padDisplay(s string, width int) string {
 	w := displayWidth(s)
@@ -115,13 +123,42 @@ func padDisplay(s string, width int) string {
 func displayWidth(s string) int {
 	w := 0
 	for _, r := range s {
-		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hangul, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) || r == '，' || r == '。' || r == '：' || r == '；' || r == '（' || r == '）' || r == '、' || r == '「' || r == '」' {
+		if isWide(r) {
 			w += 2
 		} else {
 			w++
 		}
 	}
 	return w
+}
+
+// isWide 判断一个字符在终端里占两列。
+//
+// 早先这里是一串硬编码的标点（，。：；（）、「」），漏掉了 ？！ 之类，
+// 于是「第一次用？」被算成 9 列而不是 10，整栏就歪了。改成按 Unicode 区间判断，
+// 不再靠一个手写清单去追全角标点。
+func isWide(r rune) bool {
+	switch {
+	case r >= 0x1100 && r <= 0x115F: // 韩文字母
+		return true
+	case r >= 0x2E80 && r <= 0xA4CF: // CJK 部首 / 标点 / 假名 / 注音 / 汉字
+		return true
+	case r >= 0xAC00 && r <= 0xD7A3: // 韩文音节
+		return true
+	case r >= 0xF900 && r <= 0xFAFF: // CJK 兼容汉字
+		return true
+	case r >= 0xFE30 && r <= 0xFE6F: // CJK 兼容形式
+		return true
+	case r >= 0xFF00 && r <= 0xFF60: // 全角字符，？！ 在这里
+		return true
+	case r >= 0xFFE0 && r <= 0xFFE6: // 全角货币/符号
+		return true
+	case r >= 0x1F300 && r <= 0x1FAFF: // emoji
+		return true
+	case r >= 0x20000 && r <= 0x3FFFD: // CJK 扩展 B 及以后
+		return true
+	}
+	return false
 }
 
 // wrap 把长文本按显示宽度折行，续行缩进 indent 列。多行 detail 原样保留换行。

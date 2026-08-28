@@ -77,6 +77,8 @@ aivet skill install            把 aivet 装成 Claude Code / Codex / Hermes / p
 aivet env                      系统信息 + 各工具的安装命令
 ```
 
+不用记：`aivet help` 是命令总览，`aivet help <命令>`（或 `aivet <命令> --help`）是那个命令的详细页——选项、例子、注意事项都在里面。
+
 退出码：`0` 没有故障，`1` 有故障，`2` 用法错误。**提醒（▲）不影响退出码**——能用就是能用。
 
 ### 新手：三分钟配好一台机器
@@ -103,6 +105,8 @@ aivet ask                      # 自动挑一个体检通过的 agent，把报�
 aivet ask --with claude        # 指定谁来修
 aivet ask --print              # 只打印提示词，自己粘给任何 agent
 ```
+
+agent 不用猜命令怎么用——`aivet help --json` 一次给出所有命令、选项、退出码，以及 `check --json` 报告的字段含义和建议的处理流程。
 
 反过来，让 agent 会用 aivet：
 
