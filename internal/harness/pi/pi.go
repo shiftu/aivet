@@ -1,8 +1,11 @@
 // Package pi 体检 pi coding agent（@mariozechner/pi-coding-agent）。
 //
 // ~/.pi/agent/settings.json 决定 defaultProvider / defaultModel；
-// ~/.pi/agent/models.json 声明自定义 provider：baseUrl / api / apiKey / models[]。
+// ~/.pi/agent/models.json 声明自定义 provider：baseUrl / api / apiKey / headers / models[]。
 // 内置 provider（anthropic/openai/google…）走固定环境变量或 auth.json 里的 OAuth。
+//
+// headers 是 provider 级的自定义请求头（pi 0.84 的 ProviderConfigSchema：Record<string,string>，
+// 值和 apiKey 一样支持 $ENV 写法）。公网网关前面挂着 Cloudflare 时，写个浏览器 UA 就不会被当 bot 拦。
 package pi
 
 import (
@@ -38,11 +41,12 @@ type modelDef struct {
 }
 
 type providerDef struct {
-	Name    string     `json:"name,omitempty"`
-	BaseURL string     `json:"baseUrl"`
-	API     string     `json:"api"`
-	APIKey  string     `json:"apiKey,omitempty"`
-	Models  []modelDef `json:"models"`
+	Name    string            `json:"name,omitempty"`
+	BaseURL string            `json:"baseUrl"`
+	API     string            `json:"api"`
+	APIKey  string            `json:"apiKey,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Models  []modelDef        `json:"models"`
 }
 
 type modelsFile struct {
@@ -182,6 +186,9 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	} else {
 		b.OK("model", "模型", r.model)
 	}
+	if r.custom {
+		harness.ReportHeaders(b, r.prov.BaseURL, "headers", r.prov.Headers, fixHeadersID)
+	}
 	switch {
 	case r.key != "":
 		b.OK("auth", "key", fmt.Sprintf("%s（%s）", probe.MaskKey(r.key), r.keySource))
@@ -197,7 +204,12 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	}
 	if proto, ok := protocolFor(r.prov.API); ok && r.key != "" && r.prov.BaseURL != "" {
 		ep := probe.Endpoint{BaseURL: r.prov.BaseURL, Key: r.key, Protocol: proto}
-		harness.ProbeGateway(c, b, ep, r.model)
+		// 只有 models.json 里的自定义 provider 才有 headers 这个配置位。
+		bp := harness.Bypass{Headers: r.prov.Headers}
+		if r.custom {
+			bp.FixID = fixHeadersID
+		}
+		ep = harness.ProbeGatewayWith(c, b, ep, r.model, bp)
 		// enabledModels 是用户挑出来、在 pi 里 Ctrl+P 循环切换的那几个 —— 最可能被切到。
 		// models.json 里声明的那一大串是目录（常由 cc-switch fetch-models 灌进来），
 		// 逐条报出来只会淹掉真问题，所以不查。
@@ -216,8 +228,55 @@ func slotsOf(from string, models []string) []harness.ModelSlot {
 	return out
 }
 
+const fixHeadersID = "pi.default_headers"
+
+// clientName 写进 X-Client-Name，网关日志里一眼认出是 pi。
+const clientName = "pi coding agent"
+
 func (h H) Fixers() []harness.Fixer {
-	return []harness.Fixer{{ID: "pi.default_model", Title: "defaultModel 改成提供方声明的第一个模型", Apply: fixDefaultModel}}
+	return []harness.Fixer{
+		{ID: "pi.default_model", Title: "defaultModel 改成提供方声明的第一个模型", Apply: fixDefaultModel},
+		{ID: fixHeadersID, Title: "往 models.json providers.<p>.headers 写浏览器 User-Agent（绕过 Cloudflare bot 拦截）", Apply: fixDefaultHeaders},
+	}
+}
+
+// fixDefaultHeaders 往当前 provider 写 headers，然后带着这些头重验一次，当场报修没修好。
+//
+// 改的是原样读进来的 map，不是 providerDef —— models.json 里 compat / modelOverrides 之类
+// aivet 不认识的字段，走结构体一写回去就丢了。
+func fixDefaultHeaders(c *harness.Context, dry bool) ([]string, error) {
+	r := resolve(c)
+	if r.modelsErr != nil {
+		return nil, fmt.Errorf("读 %s：%w", r.modelsPath, r.modelsErr)
+	}
+	if !r.custom {
+		return nil, fmt.Errorf("defaultProvider = %q 不在 models.json 的 providers 里，没有 headers 这个配置位", r.provName)
+	}
+	headers := harness.MergeHeaders(r.prov.Headers, harness.BypassHeaders(clientName))
+	c.Say("info", fmt.Sprintf("providers.%s.headers ← %s", r.provName, harness.HeadersSummary(headers)))
+	if dry {
+		return []string{r.modelsPath}, nil
+	}
+	provs, _ := r.rawModels["providers"].(map[string]any)
+	prov, _ := provs[r.provName].(map[string]any)
+	if prov == nil {
+		return nil, fmt.Errorf("models.json 里 providers.%s 不是对象", r.provName)
+	}
+	h := map[string]any{}
+	for k, v := range headers {
+		h[k] = v
+	}
+	prov["headers"] = h
+	if _, err := probe.Backup(r.modelsPath); err != nil {
+		return nil, err
+	}
+	if err := probe.WriteJSON(r.modelsPath, r.rawModels); err != nil {
+		return nil, err
+	}
+	proto, _ := protocolFor(r.prov.API)
+	ep := probe.Endpoint{BaseURL: r.prov.BaseURL, Key: r.key, Protocol: proto, Headers: headers}
+	harness.Reverify(c, ep, r.model)
+	return []string{r.modelsPath}, nil
 }
 
 func fixDefaultModel(c *harness.Context, dry bool) ([]string, error) {
@@ -253,8 +312,13 @@ func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []strin
 	if len(base) < 3 || base[len(base)-3:] != "/v1" {
 		base += "/v1"
 	}
-	provs[providerName] = providerDef{Name: "aivet 配置的网关", BaseURL: base, API: "openai-completions", APIKey: p.Key,
+	def := providerDef{Name: "aivet 配置的网关", BaseURL: base, API: "openai-completions", APIKey: p.Key,
 		Models: []modelDef{{ID: p.Model, Name: p.Model, ContextWindow: p.Context(), MaxTokens: p.MaxOut()}}}
+	if harness.IsPublicHTTPS(base) {
+		// 公网域名前面常挂着 Cloudflare，默认 UA 会被当 bot 拦；一开始就写好浏览器头。
+		def.Headers = harness.BypassHeaders(clientName)
+	}
+	provs[providerName] = def
 	mf["providers"] = provs
 	if _, err := probe.Backup(mp); err != nil {
 		return nil, nil, err

@@ -35,14 +35,19 @@ aivet v0.1.0  · macOS arm64
 |---|---|---|
 | **Claude Code** | settings.json 语法、接入方式（OAuth / key / 网关）、`ANTHROPIC_BASE_URL` 是否误带 `/v1`、模型别名（`sonnet`/`opus`/`haiku`）走网关时有没有映射、shell 与文件里的环境变量打架、网关三连、**三个别名各自指到的模型在不在清单里** | 跳过首次向导、去掉多余的 `/v1` |
 | **Codex CLI** | config.toml 语法、`model_provider` 与表名是否成对、`wire_api`（0.137+ 只认 responses）、key 来源（env_key / auth.json / ChatGPT 登录）、网关三连、**`review_model`（`/review` 用的那个）在不在清单里** | `wire_api` 改 responses |
-| **Hermes Agent** | config.yaml（新旧两代 schema）、提供方、key（env / ~/.hermes/.env / 明文）、模型是否已声明、网关三连、**声明的那份模型菜单有没有网关给不出的** | — |
-| **pi agent** | settings.json + models.json、defaultModel 是否在提供方清单里、key、网关三连、**`enabledModels`（Ctrl+P 能切到的那几个）在不在清单里** | defaultModel 改成清单第一个 |
+| **Hermes Agent** | config.yaml（新旧两代 schema）、提供方、key（env / ~/.hermes/.env / 明文）、模型是否已声明、公网网关的 `default_headers`、网关三连、**声明的那份模型菜单有没有网关给不出的** | 被 Cloudflare 当 bot 拦时往 `default_headers` 写浏览器 UA，写完立刻重验 |
+| **pi agent** | settings.json + models.json、defaultModel 是否在提供方清单里、key、公网网关的 `headers`、网关三连、**`enabledModels`（Ctrl+P 能切到的那几个）在不在清单里** | defaultModel 改成清单第一个；被 Cloudflare 当 bot 拦时往 `headers` 写浏览器 UA，写完立刻重验 |
 | **DeepSeek Harness (dsh)** | settings.yaml + .credentials.yaml、每个 profile 的模型覆盖、插件是否装好、Node 是否在、网关三连、**声明的那份模型菜单有没有网关给不出的** | 默认模型改成清单第一个 |
 | **cc-switch** | 谁在管：原生官方登录 / 原生自管 / cc-switch 接管 / 记录过时；原生坏了时，cc-switch 里存的备选**先探再推荐** | — |
 
 每件工具还会先确认它**真的跑得起来**：npm 装的那几个（codex / pi / dsh）常出现 shim 在、平台专用包没装全，`--version` 直接报 ENOENT——这种「装了但是坏的」会排在最前面报出来，而不是让底下的配置项一路绿灯。
 
 「网关三连」= 拉模型清单 → 模型在不在清单里 → 真发一条最小请求。六件工具指向同一个网关时只探一次。
+
+403 分两种：网关自己拒的（JSON 正文，key 没权限）和前面 **Cloudflare 把请求当 bot 拦的**（拦截页 / 挑战页、`cf-mitigated` 之类的头）。
+后者不是 key 的问题 —— hermes 和 pi 有往请求里塞自定义头的配置位，`aivet fix hermes.default_headers` / `pi.default_headers` 写个浏览器 User-Agent 就过；
+claude / codex / dsh 没有这个配置位，aivet 只会说明「探测被拦 ≠ 工具被拦」。aivet 自己的探测默认不带这些头（探测路径 ≠ 工具路径），
+配了头却不带头被拦时，会改按配置里的头再探一次并注明。
 
 有些结论**探不到底**，aivet 就明说探不到底，不假装知道：Claude Code 配 `model: "sonnet"` 时，真正发给网关的是它内部把别名解析出的模型 id，配置文件里看不见——这种情况报提醒并告诉你 `--live` 能一锤定音，而不是拿别名去和清单比对然后误判成故障。
 

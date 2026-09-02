@@ -316,6 +316,7 @@ func runFix(ctx context.Context, args []string) int {
 			continue
 		}
 		c := harness.NewContext(ctx)
+		c.Log = pr.Line // 修复项的重验结果要能打出来
 		changed, err := f.Apply(c, *dry)
 		if err != nil {
 			pr.Line("fail", label+"："+err.Error())

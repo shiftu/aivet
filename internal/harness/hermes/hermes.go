@@ -4,8 +4,11 @@
 //
 //	新：model: {default, provider}      旧：model: "…"  provider: "…"
 //
-// 自定义提供方在 providers.<name>：base_url / api_mode / key_env / api_key / models。
+// 自定义提供方在 providers.<name>：base_url / api_mode / key_env / api_key / models / default_headers。
 // key 的来源顺序：shell 环境变量 → ~/.hermes/.env → config 里的 api_key 明文。
+//
+// default_headers 是 hermes 发每个请求时都会带的自定义头。公网网关前面挂着 Cloudflare 时，
+// 它会把 hermes 默认的 http 客户端 UA 当 bot 拦成 403 —— 在这里写个浏览器 UA 就过了。
 package hermes
 
 import (
@@ -48,6 +51,7 @@ type resolved struct {
 	key       string
 	keySource string
 	models    []string
+	headers   map[string]string // providers.<p>.default_headers
 }
 
 func str(m map[string]any, k string) string {
@@ -58,6 +62,20 @@ func str(m map[string]any, k string) string {
 		return fmt.Sprint(v)
 	}
 	return ""
+}
+
+// strMap 把 YAML 里的 map 压成 map[string]string（值统一 fmt.Sprint，空 map 返回 nil）。
+func strMap(m map[string]any) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if v != nil {
+			out[k] = fmt.Sprint(v)
+		}
+	}
+	return out
 }
 
 func sub(m map[string]any, k string) map[string]any {
@@ -86,6 +104,7 @@ func resolve(c *harness.Context) resolved {
 	if p := sub(sub(r.cfg, "providers"), r.provName); p != nil {
 		r.custom = true
 		r.baseURL, r.apiMode, r.keyEnv = str(p, "base_url"), str(p, "api_mode"), str(p, "key_env")
+		r.headers = strMap(sub(p, "default_headers"))
 		if r.model == "" {
 			r.model = str(p, "default_model")
 		}
@@ -173,6 +192,9 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 	if r.custom && r.baseURL == "" {
 		b.Fail("base_url", "base_url", "自定义提供方没写 base_url", "")
 	}
+	if r.custom {
+		harness.ReportHeaders(b, r.baseURL, "default_headers", r.headers, fixHeadersID)
+	}
 	switch {
 	case r.key != "":
 		b.OK("auth", "key", fmt.Sprintf("%s（%s）", probe.MaskKey(r.key), r.keySource))
@@ -187,14 +209,13 @@ func (h H) Check(c *harness.Context, d harness.Detection) []report.Check {
 		return b.Checks()
 	}
 	if r.key != "" && r.baseURL != "" {
-		proto := probe.ChatCompletions
-		if strings.Contains(r.apiMode, "responses") {
-			proto = probe.Responses
-		} else if r.apiMode == "anthropic" {
-			proto = probe.Anthropic
+		ep := probe.Endpoint{BaseURL: r.baseURL, Key: r.key, Protocol: protocolOf(r.apiMode)}
+		// 自定义提供方才有 default_headers 这个配置位；内置提供方被拦了只能提示，修不了。
+		bp := harness.Bypass{Headers: r.headers}
+		if r.custom {
+			bp.FixID = fixHeadersID
 		}
-		ep := probe.Endpoint{BaseURL: r.baseURL, Key: r.key, Protocol: proto}
-		harness.ProbeGateway(c, b, ep, r.model)
+		ep = harness.ProbeGatewayWith(c, b, ep, r.model, bp)
 		// providers.<p>.models 是用户在 hermes 里能切到的菜单，切过去就会真发出去。
 		harness.CheckOtherModels(c, b, ep, r.model, slotsOf("声明的", r.models))
 	}
@@ -211,7 +232,56 @@ func slotsOf(from string, models []string) []harness.ModelSlot {
 	return out
 }
 
-func (H) Fixers() []harness.Fixer { return nil }
+const fixHeadersID = "hermes.default_headers"
+
+// clientName 写进 X-Client-Name，网关日志里一眼认出是 hermes。
+const clientName = "Hermes Agent"
+
+func (H) Fixers() []harness.Fixer {
+	return []harness.Fixer{{ID: fixHeadersID, Title: "往 providers.<p>.default_headers 写浏览器 User-Agent（绕过 Cloudflare bot 拦截）", Apply: fixDefaultHeaders}}
+}
+
+// fixDefaultHeaders 往当前提供方写 default_headers，然后带着这些头重验一次，当场报修没修好。
+func fixDefaultHeaders(c *harness.Context, dry bool) ([]string, error) {
+	r := resolve(c)
+	if r.cfgErr != nil {
+		return nil, fmt.Errorf("读 %s：%w", r.cfgPath, r.cfgErr)
+	}
+	if !r.custom {
+		return nil, fmt.Errorf("model.provider = %q 不是 providers 段里的自定义提供方，没有 default_headers 这个配置位", r.provName)
+	}
+	headers := harness.MergeHeaders(r.headers, harness.BypassHeaders(clientName))
+	c.Say("info", fmt.Sprintf("providers.%s.default_headers ← %s", r.provName, harness.HeadersSummary(headers)))
+	if dry {
+		return []string{r.cfgPath}, nil
+	}
+	prov := sub(sub(r.cfg, "providers"), r.provName)
+	dh := map[string]any{}
+	for k, v := range headers {
+		dh[k] = v
+	}
+	prov["default_headers"] = dh
+	if _, err := probe.Backup(r.cfgPath); err != nil {
+		return nil, err
+	}
+	if err := probe.WriteYAML(r.cfgPath, r.cfg); err != nil {
+		return nil, err
+	}
+	ep := probe.Endpoint{BaseURL: r.baseURL, Key: r.key, Protocol: protocolOf(r.apiMode), Headers: headers}
+	harness.Reverify(c, ep, r.model)
+	return []string{r.cfgPath}, nil
+}
+
+// protocolOf 把 hermes 的 api_mode 翻成探测协议。
+func protocolOf(apiMode string) probe.Protocol {
+	switch {
+	case strings.Contains(apiMode, "responses"):
+		return probe.Responses
+	case apiMode == "anthropic":
+		return probe.Anthropic
+	}
+	return probe.ChatCompletions
+}
 
 const providerName = "gateway"
 const keyEnvName = "AIVET_GATEWAY_KEY"
@@ -234,7 +304,7 @@ func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []strin
 	if !strings.HasSuffix(base, "/v1") {
 		base += "/v1"
 	}
-	providers[providerName] = map[string]any{
+	prov := map[string]any{
 		"name":          "aivet 配置的网关",
 		"base_url":      base,
 		"api_mode":      "chat_completions",
@@ -244,6 +314,15 @@ func (H) Configure(c *harness.Context, p harness.Plan) (written, skipped []strin
 			p.Model: map[string]any{"context_length": p.Context(), "max_completion_tokens": p.MaxOut()},
 		},
 	}
+	if harness.IsPublicHTTPS(base) {
+		// 公网域名前面常挂着 Cloudflare，默认 UA 会被当 bot 拦；一开始就写好浏览器头，省得回头再修。
+		dh := map[string]any{}
+		for k, v := range harness.BypassHeaders(clientName) {
+			dh[k] = v
+		}
+		prov["default_headers"] = dh
+	}
+	providers[providerName] = prov
 	cfg["providers"] = providers
 	// 统一写成新 schema；旧的顶层 provider/model 字段删掉，避免两套打架。
 	delete(cfg, "provider")

@@ -25,6 +25,23 @@ type Endpoint struct {
 	BaseURL  string   // 例：http://127.0.0.1:7421/v1 或 https://api.anthropic.com
 	Key      string   // Bearer / x-api-key
 	Protocol Protocol //
+	// Headers 是额外要带上的请求头（工具配置里的 default_headers / headers 之类）。
+	// aivet 自己的探测默认不带 —— 探测路径和工具路径本来就不是一回事，
+	// 只有在「模拟工具自己会怎么发」时才填进来，比如修完自定义头之后重验。
+	Headers map[string]string
+}
+
+// WithHeaders 返回一个带上这些请求头的副本（不改原来的）。
+func (ep Endpoint) WithHeaders(h map[string]string) Endpoint {
+	out := ep
+	out.Headers = make(map[string]string, len(ep.Headers)+len(h))
+	for k, v := range ep.Headers {
+		out.Headers[k] = v
+	}
+	for k, v := range h {
+		out.Headers[k] = v
+	}
+	return out
 }
 
 // PingResult 是一次探测结果。
@@ -33,6 +50,9 @@ type PingResult struct {
 	Status  int    // HTTP 状态码（0 = 没连上）
 	Detail  string // 一句人话
 	Elapsed time.Duration
+	// BotBlocked：这个 403 不是网关自己拒的，是前面的 Cloudflare 把请求当 bot 拦了。
+	// 区分这个很要紧 —— 前者要换 key，后者只要请求头长得像浏览器一点。
+	BotBlocked bool
 }
 
 var httpClient = &http.Client{Timeout: 25 * time.Second}
@@ -87,6 +107,7 @@ func ListModels(ctx context.Context, ep Endpoint) ([]ModelInfo, PingResult) {
 	start := time.Now()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ModelsURL(ep.BaseURL), nil)
 	setAuth(req, ep)
+	setHeaders(req, ep)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, PingResult{Detail: connErr(err), Elapsed: time.Since(start)}
@@ -95,7 +116,7 @@ func ListModels(ctx context.Context, ep Endpoint) ([]ModelInfo, PingResult) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	pr := PingResult{Status: resp.StatusCode, Elapsed: time.Since(start)}
 	if resp.StatusCode != 200 {
-		pr.Detail = httpErr(resp.StatusCode, body)
+		pr.Detail, pr.BotBlocked = describeErr(resp, body)
 		return nil, pr
 	}
 	var parsed struct {
@@ -142,6 +163,7 @@ func Ping(ctx context.Context, ep Endpoint, model string) PingResult {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	setAuth(req, ep)
+	setHeaders(req, ep)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return PingResult{Detail: connErr(err), Elapsed: time.Since(start)}
@@ -154,7 +176,7 @@ func Ping(ctx context.Context, ep Endpoint, model string) PingResult {
 		pr.Detail = fmt.Sprintf("%s 通了（%dms）", string(ep.Protocol), pr.Elapsed.Milliseconds())
 		return pr
 	}
-	pr.Detail = httpErr(resp.StatusCode, rb)
+	pr.Detail, pr.BotBlocked = describeErr(resp, rb)
 	return pr
 }
 
@@ -178,6 +200,24 @@ func setAuth(req *http.Request, ep Endpoint) {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+ep.Key)
+}
+
+// setHeaders 把 Endpoint.Headers 设上；放在 setAuth 之后，用户明确写的头优先。
+func setHeaders(req *http.Request, ep Endpoint) {
+	for k, v := range ep.Headers {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+}
+
+// describeErr 把非 2xx 响应翻成人话，并顺手判断是不是 Cloudflare 的 bot 拦截。
+func describeErr(resp *http.Response, body []byte) (string, bool) {
+	if evidence := CloudflareBlock(resp.StatusCode, resp.Header, body); evidence != "" {
+		return botErr(resp.StatusCode, evidence, body), true
+	}
+	return httpErr(resp.StatusCode, body), false
 }
 
 func connErr(err error) string {
@@ -212,6 +252,8 @@ func httpErr(code int, body []byte) string {
 		why = "403 被拒绝——key 没有这个权限 / 这个模型"
 	case 404:
 		why = "404 接口不存在——base_url 路径不对（少了或多了 /v1？），或网关不支持这个协议"
+	case 402:
+		why = "402 要付费——账户没余额或额度用完"
 	case 429:
 		why = "429 限流 / 额度用完"
 	case 400, 422:
@@ -225,4 +267,87 @@ func httpErr(code int, body []byte) string {
 		return why + "：" + snippet
 	}
 	return why
+}
+
+// cfStrongMarks 是只会出现在 Cloudflare 自己吐的拦截页 / 挑战页里的字样。
+// 见到任何一个就能下结论，不必再看是不是 JSON。
+var cfStrongMarks = []string{
+	"cf-chl", "cf_chl", "__cf", "challenge-platform",
+	"just a moment", "attention required", "checking your browser",
+	"you have been blocked", "cf-error", "error code: 10",
+}
+
+// CloudflareBlock 判断一个 403/503 是不是 Cloudflare 在网关前面把请求当 bot 拦掉了。
+// 返回证据（空串 = 不是）。
+//
+// 难点在于「网关自己的 403」和「Cloudflare 的 403」长得很像：网关挂在 Cloudflare 后面时，
+// 它自己拒绝的响应也会带 Server: cloudflare / cf-ray。所以边缘头只是弱信号，
+// 得配上「响应不是 JSON」（网关拒绝会给 JSON，Cloudflare 拦截页是 HTML / 纯文本）才算数；
+// 拦截页 / 挑战页特有的字样则是强信号，单独就够。
+func CloudflareBlock(status int, hdr http.Header, body []byte) string {
+	if status != 403 && status != 503 {
+		return ""
+	}
+	var ev []string
+	if v := hdr.Get("Server"); strings.Contains(strings.ToLower(v), "cloudflare") {
+		ev = append(ev, "server="+v)
+	}
+	for _, h := range []string{"cf-ray", "cf-cache-status", "cf-mitigated"} {
+		if v := hdr.Get(h); v != "" {
+			if h == "cf-mitigated" {
+				ev = append(ev, h+"="+v)
+			} else {
+				ev = append(ev, h)
+			}
+		}
+	}
+	edge := len(ev) > 0
+	strong := hdr.Get("cf-mitigated") != ""
+	low := strings.ToLower(string(body))
+	for _, m := range cfStrongMarks {
+		if strings.Contains(low, m) {
+			ev = append(ev, "body:"+m)
+			strong = true
+			break
+		}
+	}
+	if !strong {
+		for _, h := range []string{"Content-Type", "Set-Cookie", "Location"} {
+			if v := strings.ToLower(hdr.Get(h)); strings.Contains(v, "cf-chl") || strings.Contains(v, "cf_chl") || strings.Contains(v, "__cf") {
+				ev = append(ev, "header:"+h)
+				strong = true
+				break
+			}
+		}
+	}
+	if strong {
+		return strings.Join(ev, ", ")
+	}
+	// 只有边缘头（或正文提了一嘴 cloudflare）：要求正文不是 JSON 才算拦截。
+	if !edge && strings.Contains(low, "cloudflare") {
+		ev = append(ev, "body:cloudflare")
+		edge = true
+	}
+	if edge && !looksJSON(body) {
+		return strings.Join(ev, ", ")
+	}
+	return ""
+}
+
+func looksJSON(body []byte) bool {
+	t := bytes.TrimSpace(body)
+	return len(t) > 0 && (t[0] == '{' || t[0] == '[')
+}
+
+// botErr 是 Cloudflare 拦截时的人话。
+func botErr(code int, evidence string, body []byte) string {
+	snippet := strings.Join(strings.Fields(string(body)), " ")
+	if len(snippet) > 80 {
+		snippet = snippet[:80] + "…"
+	}
+	s := fmt.Sprintf("%d 疑似 Cloudflare bot 拦截（%s）——不是 key 的问题，是请求头太像机器", code, evidence)
+	if snippet != "" && !strings.HasPrefix(snippet, "<") {
+		s += "：" + snippet
+	}
+	return s
 }
